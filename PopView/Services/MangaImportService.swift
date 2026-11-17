@@ -85,7 +85,7 @@ struct MangaImportService {
         }
         // Explicit thumbnail/preview assets and tiny image renditions are not manga pages.
         // Keep small images when they are the only available content to avoid empty imports.
-        let filteredCandidates = sortedCandidates.filter { !isLikelyThumbnail($0.url) }
+        let filteredCandidates = filterThumbnailCandidates(sortedCandidates)
         let ordered = filteredCandidates.isEmpty ? sortedCandidates : filteredCandidates
 
         var pages: [PreparedMangaPage] = []
@@ -109,6 +109,28 @@ struct MangaImportService {
             }
         }
         return pages
+    }
+
+    private static func filterThumbnailCandidates(_ candidates: [Candidate]) -> [Candidate] {
+        let namedOrTinyFiltered = candidates.filter { !isLikelyThumbnail($0.url) }
+        let imageSizes: [(url: URL, longest: Int, area: Int)] = candidates.compactMap { candidate in
+            guard let source = CGImageSourceCreateWithURL(candidate.url as CFURL, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+            return (candidate.url, max(width, height), width * height)
+        }
+        guard imageSizes.count >= 4 else { return namedOrTinyFiltered }
+        let sortedLongest = imageSizes.map(\.longest).sorted()
+        let sortedAreas = imageSizes.map(\.area).sorted()
+        let medianLongest = sortedLongest[sortedLongest.count / 2]
+        let medianArea = sortedAreas[sortedAreas.count / 2]
+        let relativeThumbnailURLs = Set(imageSizes.compactMap { size -> URL? in
+            size.longest < Int(Double(medianLongest) * 0.55)
+                && size.area < Int(Double(medianArea) * 0.40) ? size.url : nil
+        })
+        let result = namedOrTinyFiltered.filter { !relativeThumbnailURLs.contains($0.url) }
+        return result
     }
 
     private static func isLikelyThumbnail(_ url: URL) -> Bool {
