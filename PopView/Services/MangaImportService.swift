@@ -96,6 +96,9 @@ struct MangaImportService {
                     if childValues?.isDirectory == true { enumerator.skipDescendants() }
                     continue
                 }
+                // The directory enumerator is already recursive. Let it descend
+                // naturally instead of scanning a nested folder twice.
+                if childValues?.isDirectory == true { continue }
                 let relative = child.path.replacingOccurrences(of: url.path + "/", with: "")
                 try collect(url: child, relativePath: relativePath + "/" + relative,
                             staging: staging, state: state, depth: depth)
