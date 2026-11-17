@@ -17,6 +17,7 @@ struct SpeechRegion: Identifiable, Codable, Hashable {
     var speakerID: UUID?
     var confidence: Float
     var wordTimings: [WordTiming] = []
+    var audioFileName: String?
 }
 
 struct CGRectCodable: Codable, Hashable {
