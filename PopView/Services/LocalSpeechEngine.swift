@@ -10,6 +10,8 @@ final class LocalSpeechEngine: ObservableObject {
     @Published private(set) var isGenerating = false
     @Published private(set) var lastRTF: Double?
     @Published private(set) var downloadError: String?
+    @Published private(set) var isStartupReady = false
+    @Published private(set) var isStartupAttempting = false
 
     let modelManager = LocalModelManager()
     private let engine = IrodoriEngine()
@@ -17,12 +19,18 @@ final class LocalSpeechEngine: ObservableObject {
     private var preparedModelPath: String?
 
     func installModelAtLaunch() async {
+        guard !isStartupReady, !isStartupAttempting else { return }
+        isStartupAttempting = true
+        downloadError = nil
+        defer { isStartupAttempting = false }
         do {
             try await modelManager.installIfNeeded()
             modelStatus = modelManager.status
+            isStartupReady = true
         } catch {
             modelStatus = modelManager.status
             downloadError = error.localizedDescription
+            isStartupReady = false
         }
     }
 
