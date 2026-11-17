@@ -42,6 +42,7 @@ struct FoundationModelsMangaAnalyzer {
     func analyze(
         image: UIImage,
         recognizedTexts: [String],
+        recognizedBoxes: [CGRect],
         knownCharacters: [CharacterVoice]
     ) async throws -> (speakers: [Speaker], annotations: [Annotation]) {
         guard let cgImage = image.cgImage else { throw AnalysisError.invalidImage }
@@ -60,7 +61,13 @@ struct FoundationModelsMangaAnalyzer {
         let known = knownCharacters.map {
             "名前: \($0.name) / 外見: \($0.visualDescription ?? "未登録") / 声の特徴: \($0.voiceDescription)"
         }.joined(separator: "\n")
-        let numberedLines = recognizedTexts.enumerated().map { "[\($0.offset)] \($0.element)" }.joined(separator: "\n")
+        let numberedLines = recognizedTexts.enumerated().map { index, text in
+            let box = recognizedBoxes.indices.contains(index) ? recognizedBoxes[index] : .zero
+            return String(
+                format: "[%d] %@ | 吹き出し位置: x=%.3f y=%.3f 幅=%.3f 高さ=%.3f",
+                index, text, box.minX, box.minY, box.width, box.height
+            )
+        }.joined(separator: "\n")
 
         let session = LanguageModelSession()
         let response = try await session.respond {
@@ -70,7 +77,11 @@ struct FoundationModelsMangaAnalyzer {
             最重要ルール:
             - セリフ本文はOCR結果が正本です。本文を書き換えたり、新しいセリフを追加したりしないでください。
             - OCR一覧の番号をlineIndexとしてそのまま使い、各行に最大1つの注釈を返してください。
-            - 吹き出しの位置、人物の口元・視線・表情、コマの連続性を手掛かりに話者を推定してください。
+            - OCR一覧には画像内の正規化座標（左下原点）が含まれます。まず座標から吹き出しのおおよその位置を把握してください。
+            - 吹き出しの位置と人物の口元・視線・表情、コマの連続性を組み合わせて話者を推定してください。
+            - 吹き出しと人物の距離だけで決めず、同じコマ内で発話している人物か、視線が誰に向いているかも確認してください。
+            - 既知キャラクターの外見説明と画像を照合し、同一人物だと視覚的に判断できる場合は既知キャラクター名を再利用してください。
+            - 1つの人物に別名を付けて重複登録しないでください。
             - 既知キャラクター一覧に一致する人物がいれば、その名前をそのまま使ってください。確信がない場合はspeakerKeyをnullにしてください。
             - 新しい人物を特定できた場合だけspeakerを追加し、外見の特徴を短く書いてください。
             - emotionは短い感情ラベル、actingDirectionは声の高さ・速さ・強さ・間・息づかいなどの演技指示を日本語で具体的に書いてください。
