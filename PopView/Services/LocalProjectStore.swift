@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import Combine
 
 @MainActor
 final class LocalProjectStore: ObservableObject {
@@ -45,7 +46,16 @@ final class LocalProjectStore: ObservableObject {
         let destination = projectFolder(projectID).appendingPathComponent(UUID().uuidString + ".pdf")
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: url, to: destination)
-        projects[index].pages.append(MangaPage(title: url.deletingPathExtension().lastPathComponent, imageFileName: destination.lastPathComponent))
+        let count = PDFPageRenderer.pageCount(url: destination)
+        guard count > 0 else { throw CocoaError(.fileReadCorruptFile) }
+        for pageIndex in 0..<count {
+            let suffix = count > 1 ? " - \(pageIndex + 1)" : ""
+            projects[index].pages.append(MangaPage(
+                title: url.deletingPathExtension().lastPathComponent + suffix,
+                imageFileName: destination.lastPathComponent,
+                sourcePageIndex: pageIndex
+            ))
+        }
         persist()
     }
 
