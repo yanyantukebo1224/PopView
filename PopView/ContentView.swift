@@ -42,9 +42,46 @@ struct ContentView: View {
         defer { isScanningInbox = false }
         do {
             let count = try await store.importInboxItems()
-            inboxMessage = count > 0 ? "\(count)ページをライブラリに追加しました。" : "新しいファイルはありません。"
+            if count > 0 {
+                inboxMessage = "\(count)ページを取り込みました。自動解析を開始します…"
+                await analyzePendingPages()
+                inboxMessage = "\(count)ページを取り込み、OCR・話者解析を完了しました。"
+            } else {
+                inboxMessage = "新しいファイルはありません。"
+            }
         } catch {
             inboxMessage = "取り込みに失敗しました: " + error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func analyzePendingPages() async {
+        let pending = store.projects.flatMap { project in
+            project.pages.filter { $0.textRegions.isEmpty }.map { (project.id, $0) }
+        }
+        guard !pending.isEmpty else { return }
+
+        var completed = 0
+        for (projectID, page) in pending {
+            guard let image = store.image(for: page, projectID: projectID) else { continue }
+            let knownCharacters = store.projects.first(where: { $0.id == projectID })?.characters ?? []
+            do {
+                let result = try await MangaPageAnalysisService().analyze(
+                    image: image,
+                    knownCharacters: knownCharacters
+                )
+                for character in result.newCharacters {
+                    store.addCharacter(character, to: projectID)
+                }
+                var updated = page
+                updated.textRegions = result.regions
+                store.updatePage(updated, projectID: projectID)
+                completed += 1
+                inboxMessage = "自動解析中… \(completed) / \(pending.count) ページ"
+            } catch {
+                completed += 1
+                inboxMessage = "自動解析中… \(completed) / \(pending.count) ページ（\(error.localizedDescription)）"
+            }
         }
     }
 
@@ -212,32 +249,70 @@ private struct ProjectView: View {
     @ObservedObject var store: LocalProjectStore
     @ObservedObject var speechEngine: LocalSpeechEngine
     @ObservedObject var modelManager: LocalModelManager
-    @State private var errorMessage: String?
+    @State private var selectedTab = 1
 
-    private var project: MangaProject? { store.projects.first(where: {$0.id == projectID}) }
+    private var project: MangaProject? { store.projects.first(where: { $0.id == projectID }) }
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            ProjectEditList(
+                projectID: projectID,
+                store: store,
+                speechEngine: speechEngine,
+                modelManager: modelManager
+            )
+            .tabItem { Label("編集モード", systemImage: "slider.horizontal.3") }
+            .tag(0)
+
+            MangaReaderView(projectID: projectID, store: store)
+                .tabItem { Label("リードモード", systemImage: "book.pages") }
+                .tag(1)
+        }
+        .navigationTitle(project?.title ?? "作品")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct ProjectEditList: View {
+    let projectID: UUID
+    @ObservedObject var store: LocalProjectStore
+    @ObservedObject var speechEngine: LocalSpeechEngine
+    @ObservedObject var modelManager: LocalModelManager
+
+    private var project: MangaProject? { store.projects.first(where: { $0.id == projectID }) }
 
     var body: some View {
         List {
-            Section("ページ") {
+            Section("ページ・解析結果") {
                 if let project, project.pages.isEmpty {
                     ContentUnavailableView("ページがありません", systemImage: "doc.text.image")
                 }
                 if let project {
                     ForEach(Array(project.pages.enumerated()), id: \.element.id) { index, page in
                         NavigationLink {
-                            PageEditorView(projectID: projectID, pageID: page.id, store: store, speechEngine: speechEngine, modelManager: modelManager)
+                            PageEditorView(
+                                projectID: projectID,
+                                pageID: page.id,
+                                store: store,
+                                speechEngine: speechEngine,
+                                modelManager: modelManager
+                            )
                         } label: {
-                            HStack {
+                            HStack(spacing: 12) {
                                 if let image = store.image(for: page, projectID: projectID) {
                                     Image(uiImage: image).resizable().scaledToFill()
-                                        .frame(width: 52, height: 68).clipped().cornerRadius(5)
+                                        .frame(width: 58, height: 76).clipped().cornerRadius(5)
                                 } else {
-                                    Image(systemName: "doc").frame(width: 52, height: 68)
+                                    Image(systemName: "doc").frame(width: 58, height: 76)
                                 }
-                                VStack(alignment: .leading) {
-                                    Text(page.title)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(page.title).font(.headline)
                                     Text("ページ \(index + 1) ・ \(page.textRegions.count) セリフ")
                                         .font(.caption).foregroundStyle(.secondary)
+                                    if page.textRegions.isEmpty {
+                                        Label("未解析", systemImage: "circle.dashed")
+                                            .font(.caption2).foregroundStyle(.orange)
+                                    }
                                 }
                             }
                         }
@@ -245,27 +320,134 @@ private struct ProjectView: View {
                     .onDelete { store.deletePages(at: $0, from: projectID) }
                 }
             }
+
             Section("音声モデル") {
                 Label(speechEngine.modelStatus, systemImage: modelManager.isInstalled ? "checkmark.circle.fill" : "arrow.down.circle")
                     .font(.caption)
                 if modelManager.totalFiles > 0 {
                     ProgressView()
-                    Text("取得済み \(modelManager.completedFiles)/\(modelManager.totalFiles) ファイル（ファイル単位の検証中）")
+                    Text("取得済み \(modelManager.completedFiles)/\(modelManager.totalFiles) ファイル")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let error = speechEngine.downloadError {
                     Text(error).font(.caption).foregroundStyle(.red)
                 }
-                Text("初回起動時にIrodori-TTS Core MLモデルを取得します。取得後の音声生成は端末内で動作します。")
+                Text("音声生成はモデル取得後、端末内で動作します。")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
-        .navigationTitle(project?.title ?? "作品")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
-        .alert("読み込みエラー", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-            Button("OK", role: .cancel) { errorMessage = nil }
-        } message: { Text(errorMessage ?? "") }
+    }
+}
+
+private struct MangaReaderView: View {
+    let projectID: UUID
+    @ObservedObject var store: LocalProjectStore
+    @State private var selectedPageIndex = 0
+    @State private var audioPlayer: AVAudioPlayer?
+    @State private var playingRegionID: UUID?
+
+    private var project: MangaProject? { store.projects.first(where: { $0.id == projectID }) }
+
+    var body: some View {
+        Group {
+            if let project, !project.pages.isEmpty {
+                VStack(spacing: 0) {
+                    TabView(selection: $selectedPageIndex) {
+                        ForEach(Array(project.pages.enumerated()), id: \.element.id) { index, page in
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    if let image = store.image(for: page, projectID: projectID) {
+                                        Image(uiImage: image)
+                                            .resizable()
+                                            .scaledToFit()
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.horizontal, 8)
+                                    } else {
+                                        ContentUnavailableView("ページ画像を開けません", systemImage: "photo")
+                                    }
+
+                                    if !page.textRegions.isEmpty {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            Text("セリフ").font(.headline)
+                                            ForEach(page.textRegions.sorted {
+                                                ($0.readingOrder ?? 0) < ($1.readingOrder ?? 0)
+                                            }) { region in
+                                                HStack(alignment: .top, spacing: 10) {
+                                                    VStack(alignment: .leading, spacing: 3) {
+                                                        Text(region.text)
+                                                            .font(.body)
+                                                        if let name = region.speakerID.flatMap({ id in
+                                                            project.characters.first(where: { $0.id == id })?.name
+                                                        }) {
+                                                            Text(name).font(.caption2).foregroundStyle(.secondary)
+                                                        }
+                                                    }
+                                                    Spacer(minLength: 4)
+                                                    if let fileName = region.audioFileName {
+                                                        Button {
+                                                            play(fileName, regionID: region.id)
+                                                        } label: {
+                                                            Image(systemName: playingRegionID == region.id ? "speaker.wave.2.fill" : "play.fill")
+                                                        }
+                                                        .buttonStyle(.borderless)
+                                                    }
+                                                }
+                                                .padding(10)
+                                                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+                                            }
+                                        }
+                                        .padding(.horizontal)
+                                        .padding(.bottom, 12)
+                                    }
+                                }
+                            }
+                            .tag(index)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+
+                    HStack {
+                        Button {
+                            selectedPageIndex = max(0, selectedPageIndex - 1)
+                        } label: {
+                            Label("前へ", systemImage: "chevron.left")
+                        }
+                        .disabled(selectedPageIndex == 0)
+                        Spacer()
+                        Text("\(selectedPageIndex + 1) / \(project.pages.count)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            selectedPageIndex = min(project.pages.count - 1, selectedPageIndex + 1)
+                        } label: {
+                            Label("次へ", systemImage: "chevron.right")
+                        }
+                        .disabled(selectedPageIndex >= project.pages.count - 1)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+                    .background(.bar)
+                }
+            } else {
+                ContentUnavailableView("読むページがありません", systemImage: "book")
+            }
+        }
+        .onChange(of: project?.pages.count ?? 0) { _, count in
+            selectedPageIndex = min(selectedPageIndex, max(0, count - 1))
+        }
+    }
+
+    private func play(_ fileName: String, regionID: UUID) {
+        do {
+            let player = try AVAudioPlayer(contentsOf: store.audioURL(name: fileName, projectID: projectID))
+            audioPlayer = player
+            playingRegionID = regionID
+            player.play()
+        } catch {
+            playingRegionID = nil
+        }
     }
 }
 
@@ -425,84 +607,21 @@ private struct PageEditorView: View {
         analysisNotice = nil
         defer { isAnalyzing = false }
 
-        // Primary path: analyze the page pixels directly with Apple's on-device
-        // multimodal Foundation Model. This path does not run a separate OCR pass.
         do {
-            let result = try await FoundationModelsMangaAnalyzer().analyze(image: image)
-            var speakerIDs: [String: UUID] = [:]
-
-            for speaker in result.speakers {
-                if let existing = store.projects.first(where: { $0.id == projectID })?
-                    .characters.first(where: { $0.name == speaker.name }) {
-                    speakerIDs[speaker.key] = existing.id
-                } else {
-                    var character = CharacterVoice(name: speaker.name)
-                    character.visualDescription = speaker.appearance
-                    store.addCharacter(character, to: projectID)
-                    speakerIDs[speaker.key] = character.id
-                }
-            }
-
-            let regions = result.dialogues
-                .sorted { $0.readingOrder < $1.readingOrder }
-                .compactMap { dialogue -> SpeechRegion? in
-                    let x = min(max(dialogue.box.x, 0), 1)
-                    let y = min(max(dialogue.box.y, 0), 1)
-                    let width = min(max(dialogue.box.width, 0), 1 - x)
-                    let height = min(max(dialogue.box.height, 0), 1 - y)
-                    guard width > 0.005, height > 0.005,
-                          !dialogue.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                        return nil
-                    }
-                    // Foundation Models uses a top-left origin; stored page geometry
-                    // follows Vision's normalized lower-left origin.
-                    let rect = CGRect(x: x, y: 1 - y - height, width: width, height: height)
-                    var region = SpeechRegion(
-                        text: dialogue.text,
-                        box: CGRectCodable(rect),
-                        speakerID: dialogue.speakerKey.flatMap { speakerIDs[$0] },
-                        confidence: 0.55
-                    )
-                    region.speakerLabel = dialogue.speakerKey
-                    region.emotion = dialogue.emotion
-                    region.actingDirection = dialogue.actingDirection
-                    region.readingOrder = dialogue.readingOrder
-                    return region
-                }
-
-            guard !regions.isEmpty else {
-                throw FoundationModelsMangaAnalyzer.AnalysisError.emptyResult
+            let knownCharacters = project?.characters ?? []
+            let result = try await MangaPageAnalysisService().analyze(
+                image: image,
+                knownCharacters: knownCharacters
+            )
+            for character in result.newCharacters {
+                store.addCharacter(character, to: projectID)
             }
             var updated = page
-            updated.textRegions = regions
+            updated.textRegions = result.regions
             store.updatePage(updated, projectID: projectID)
-            analysisNotice = "Apple Foundation Modelsで画像を直接解析しました。座標・話者・セリフは推定結果なので確認してください。"
-            return
+            analysisNotice = result.notice + " 座標と話者は編集モードで修正できます。"
         } catch {
-            // Fallback for older OS versions, unavailable Apple Intelligence,
-            // or an image response that could not be parsed.
-            let aiReason = error.localizedDescription
-            do {
-                let analyzer = MangaAnalyzer()
-                let text = try await analyzer.recognizeText(in: image)
-                let boxes = try await analyzer.detectBalloonCandidates(in: image)
-                var regions = text.map { item in
-                    SpeechRegion(text: item.text, box: CGRectCodable(item.box), confidence: item.confidence)
-                }
-                for index in regions.indices {
-                    let center = regions[index].box.cgRect
-                    if let candidate = boxes.filter({ $0.insetBy(dx: -0.025, dy: -0.025).contains(center) })
-                        .min(by: { $0.width * $0.height < $1.width * $1.height }) {
-                        regions[index].box = CGRectCodable(candidate)
-                    }
-                }
-                var updated = page
-                updated.textRegions = regions
-                store.updatePage(updated, projectID: projectID)
-                analysisNotice = "Foundation Modelsを利用できなかったため、Vision OCRに切り替えました。理由: \(aiReason)"
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+            errorMessage = error.localizedDescription
         }
     }
 
