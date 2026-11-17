@@ -23,6 +23,21 @@ final class LocalProjectStore: ObservableObject {
         return project
     }
 
+    func deleteProjects(at offsets: IndexSet) {
+        let ids = offsets.compactMap { projects.indices.contains($0) ? projects[$0].id : nil }
+        for id in ids {
+            try? FileManager.default.removeItem(at: projectFolder(id))
+        }
+        projects.removeAll { ids.contains($0.id) }
+        persist()
+    }
+
+    func deletePages(at offsets: IndexSet, from projectID: UUID) {
+        guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        projects[index].pages.remove(atOffsets: offsets)
+        persist()
+    }
+
     func addImportedItems(urls: [URL], to projectID: UUID) async throws -> Int {
         guard let projectIndex = projects.firstIndex(where: { $0.id == projectID }) else { return 0 }
         let destination = projectFolder(projectID)
