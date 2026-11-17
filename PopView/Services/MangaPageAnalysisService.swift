@@ -33,6 +33,7 @@ struct MangaPageAnalysisService {
             let semantic = try await FoundationModelsMangaAnalyzer().analyze(
                 image: image,
                 recognizedTexts: recognized.map(\.text),
+                recognizedBoxes: recognized.map(\.box),
                 knownCharacters: knownCharacters
             )
             for speaker in semantic.speakers {
