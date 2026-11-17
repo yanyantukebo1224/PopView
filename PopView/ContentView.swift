@@ -58,10 +58,12 @@ struct ContentView: View {
                             }
                         }
                     }
+                    .onDelete { store.deleteProjects(at: $0) }
                 }
             }
             .navigationTitle("PopView")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { newTitle = ""; showingNewProject = true } label: {
                         Label("新規作品", systemImage: "plus")
@@ -202,6 +204,7 @@ private struct ProjectView: View {
                             }
                         }
                     }
+                    .onDelete { store.deletePages(at: $0, from: projectID) }
                 }
             }
             Section("音声モデル") {
@@ -221,6 +224,7 @@ private struct ProjectView: View {
         }
         .navigationTitle(project?.title ?? "作品")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
         .fileImporter(isPresented: $showingImporter,
                       allowedContentTypes: [
                         .image, .pdf, .zip, .folder,
