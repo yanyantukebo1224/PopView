@@ -539,6 +539,7 @@ private struct PageEditorView: View {
     @State private var activeWords: [WordTiming] = []
     @State private var showingAudioImporter = false
     @State private var showingReferenceImporter = false
+    @State private var showingVoiceLibrary = false
     @State private var selectedCharacterID: UUID?
     @State private var generatingRegionID: UUID?
     @State private var analysisNotice: String?
@@ -625,35 +626,39 @@ private struct PageEditorView: View {
             }
             .presentationDetents([.medium])
         }
-        .fileImporter(isPresented: $showingReferenceImporter, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
+        .fileImporter(
+            isPresented: $showingReferenceImporter,
+            allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff],
+            allowsMultipleSelection: false
+        ) { result in
             do {
                 guard let url = try result.get().first, let selectedCharacterID,
                       var current = project?.characters.first(where: { $0.id == selectedCharacterID }) else { return }
-                let access = url.startAccessingSecurityScopedResource()
-                defer { if access { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let name = try store.storeAudio(data: data, fileExtension: url.pathExtension.isEmpty ? "m4a" : url.pathExtension, projectID: projectID)
+                let name = try store.importAudioFile(from: url, projectID: projectID)
                 current.referenceAudioFileName = name
                 store.updateCharacter(current, to: projectID)
-            } catch { errorMessage = error.localizedDescription }
+            } catch { errorMessage = "参照音声を取り込めませんでした: " + error.localizedDescription }
         }
-        .fileImporter(isPresented: $showingAudioImporter, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
+        .fileImporter(
+            isPresented: $showingAudioImporter,
+            allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .aiff],
+            allowsMultipleSelection: false
+        ) { result in
             do {
-                guard let url = try result.get().first, let page else { return }
-                let access = url.startAccessingSecurityScopedResource()
-                defer { if access { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let name = try store.storeAudio(data: data, fileExtension: url.pathExtension.isEmpty ? "m4a" : url.pathExtension, projectID: projectID)
+                guard let url = try result.get().first, let page,
+                      let region = selectedAudioRegion else { return }
+                let name = try store.importAudioFile(from: url, projectID: projectID)
                 let localURL = store.audioURL(name: name, projectID: projectID)
                 let asset = AVURLAsset(url: localURL)
-                Task {
+                Task { @MainActor in
                     do {
                         let loadedDuration = try await asset.load(.duration)
                         let duration = loadedDuration.seconds
-                        let region = selectedAudioRegion
-                        let words = region.map { SpeechTimingEstimator.estimate(text: $0.text, duration: duration) } ?? []
-                        if let region,
-                           let index = page.textRegions.firstIndex(where: { $0.id == region.id }) {
+                        guard duration.isFinite, duration > 0 else {
+                            throw CocoaError(.fileReadCorruptFile)
+                        }
+                        let words = SpeechTimingEstimator.estimate(text: region.text, duration: duration)
+                        if let index = page.textRegions.firstIndex(where: { $0.id == region.id }) {
                             var updated = page
                             updated.textRegions[index].audioFileName = name
                             updated.textRegions[index].wordTimings = words
@@ -661,15 +666,60 @@ private struct PageEditorView: View {
                         }
                         try playback.load(url: localURL, timings: words)
                         activeWords = words
-                        activeRegionID = region?.id
+                        activeRegionID = region.id
                         playback.play()
-                    } catch { errorMessage = error.localizedDescription }
+                    } catch { errorMessage = "音声ファイルを読み込めませんでした: " + error.localizedDescription }
                 }
-            } catch { errorMessage = error.localizedDescription }
+            } catch { errorMessage = "音声ファイルを取り込めませんでした: " + error.localizedDescription }
+        }
+        .sheet(isPresented: $showingVoiceLibrary) {
+            NavigationStack {
+                List {
+                    if let character = selectedCharacter {
+                        let files = store.availableReferenceAudioURLs(
+                            projectID: projectID, characterName: character.name
+                        )
+                        if files.isEmpty {
+                            ContentUnavailableView(
+                                "音声ファイルがありません",
+                                systemImage: "waveform",
+                                description: Text("VoiceLibrary/作品名/キャラクター名 に音声ファイルを入れてください。")
+                            )
+                        }
+                        ForEach(files, id: \.path) { url in
+                            Button {
+                                do {
+                                    let name = try store.importAudioFile(from: url, projectID: projectID)
+                                    var updated = character
+                                    updated.referenceAudioFileName = name
+                                    store.updateCharacter(updated, to: projectID)
+                                    showingVoiceLibrary = false
+                                } catch {
+                                    errorMessage = "参照音声を取り込めませんでした: " + error.localizedDescription
+                                }
+                            } label: {
+                                Label(url.lastPathComponent, systemImage: "waveform")
+                            }
+                        }
+                    } else {
+                        ContentUnavailableView("キャラクターが選択されていません", systemImage: "person")
+                    }
+                }
+                .navigationTitle("キャラクター音声")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("閉じる") { showingVoiceLibrary = false }
+                    }
+                }
+            }
         }
         .alert("エラー", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
+    }
+
+    private var selectedCharacter: CharacterVoice? {
+        selectedCharacterID.flatMap { id in project?.characters.first(where: { $0.id == id }) }
     }
 
     private var playbackRegionID: UUID? { playback.isPlaying ? activeRegionID : nil }
@@ -720,7 +770,11 @@ private struct PageEditorView: View {
                     Button("未設定") { assign(nil, to: region, page: page) }
                     ForEach(project?.characters ?? []) { character in
                         Button(character.name) { assign(character.id, to: region, page: page) }
-                        Button("「\(character.name)」の参照音声を設定") {
+                        Button("「\(character.name)」の音声をVoiceLibraryから選択") {
+                            selectedCharacterID = character.id
+                            showingVoiceLibrary = true
+                        }
+                        Button("「\(character.name)」の音声ファイルを参照…") {
                             selectedCharacterID = character.id
                             showingReferenceImporter = true
                         }
