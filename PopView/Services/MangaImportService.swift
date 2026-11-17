@@ -80,9 +80,13 @@ struct MangaImportService {
             throw ImportError.noReadablePages
         }
 
-        let ordered = state.candidates.sorted {
+        let sortedCandidates = state.candidates.sorted {
             $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
         }
+        // Explicit thumbnail/preview assets and tiny image renditions are not manga pages.
+        // Keep small images when they are the only available content to avoid empty imports.
+        let filteredCandidates = sortedCandidates.filter { !isLikelyThumbnail($0.url) }
+        let ordered = filteredCandidates.isEmpty ? sortedCandidates : filteredCandidates
 
         var pages: [PreparedMangaPage] = []
         for candidate in ordered {
@@ -98,12 +102,69 @@ struct MangaImportService {
             } else {
                 let ext = candidate.url.pathExtension.isEmpty ? "img" : candidate.url.pathExtension.lowercased()
                 let storedName = UUID().uuidString + "." + ext
-                try fm.copyItem(at: candidate.url, to: destination.appendingPathComponent(storedName))
-                pages.append(PreparedMangaPage(fileName: storedName,
-                    title: candidate.title, sourcePageIndex: nil))
+                let storedURL = destination.appendingPathComponent(storedName)
+                try fm.copyItem(at: candidate.url, to: storedURL)
+                let splitPages = try splitSpreadIfNeeded(at: storedURL, title: candidate.title, destination: destination)
+                pages.append(contentsOf: splitPages)
             }
         }
         return pages
+    }
+
+    private static func isLikelyThumbnail(_ url: URL) -> Bool {
+        let name = url.deletingPathExtension().lastPathComponent.lowercased()
+        let tokens = ["thumbnail", "thumb", "preview", "small", "poster", "icon"]
+        if tokens.contains(where: { name.contains($0) }) { return true }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return false }
+        return max(width, height) < 420
+    }
+
+    /// Converts a landscape double-page scan into two portrait page images.
+    /// Manga reading order is right page first, then left page.
+    private static func splitSpreadIfNeeded(at sourceURL: URL, title: String, destination: URL) throws -> [PreparedMangaPage] {
+        guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 12_000
+              ] as CFDictionary) else {
+            return [PreparedMangaPage(fileName: sourceURL.lastPathComponent, title: title, sourcePageIndex: nil)]
+        }
+
+        let ratio = Double(image.width) / Double(image.height)
+        guard ratio >= 1.32, image.width >= 1_200, image.height >= 700 else {
+            return [PreparedMangaPage(fileName: sourceURL.lastPathComponent, title: title, sourcePageIndex: nil)]
+        }
+
+        let center = image.width / 2
+        let rightRect = CGRect(x: center, y: 0, width: image.width - center, height: image.height)
+        let leftRect = CGRect(x: 0, y: 0, width: center, height: image.height)
+        guard let right = image.cropping(to: rightRect), let left = image.cropping(to: leftRect) else {
+            return [PreparedMangaPage(fileName: sourceURL.lastPathComponent, title: title, sourcePageIndex: nil)]
+        }
+
+        func write(_ cgImage: CGImage, suffix: String) throws -> String {
+            let name = UUID().uuidString + ".jpg"
+            let url = destination.appendingPathComponent(name)
+            guard let output = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            CGImageDestinationAddImage(output, cgImage, [kCGImageDestinationLossyCompressionQuality: 0.94] as CFDictionary)
+            guard CGImageDestinationFinalize(output) else { throw CocoaError(.fileWriteUnknown) }
+            return name
+        }
+
+        // Remove the temporary full-spread copy once both split pages are safely written.
+        let rightName = try write(right, suffix: "right")
+        let leftName = try write(left, suffix: "left")
+        try? FileManager.default.removeItem(at: sourceURL)
+        return [
+            PreparedMangaPage(fileName: rightName, title: title + " - 右ページ", sourcePageIndex: nil),
+            PreparedMangaPage(fileName: leftName, title: title + " - 左ページ", sourcePageIndex: nil)
+        ]
     }
 
     private static func safeFileName(_ name: String) -> String {
