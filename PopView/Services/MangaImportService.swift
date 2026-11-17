@@ -147,7 +147,7 @@ struct MangaImportService {
             }
         } else if ext == "rar" {
             let archive = try Unrar.Archive(fileURL: url)
-            if archive.isVolume && !archive.isFirstVolume {
+            if archive.isVolume {
                 throw ImportError.unsupportedRARVolume
             }
             let entries = try archive.entries()
