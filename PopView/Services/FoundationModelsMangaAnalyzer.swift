@@ -4,8 +4,8 @@ import UIKit
 import FoundationModels
 #endif
 
-/// Uses the on-device Apple Foundation Model to read a manga page directly from pixels.
-/// Coordinates returned by a language model are estimates, so the editor must allow review.
+/// Uses Apple Intelligence for semantic interpretation only.
+/// Exact dialogue text and geometry always come from Vision OCR.
 struct FoundationModelsMangaAnalyzer {
     struct Speaker: Decodable {
         let key: String
@@ -13,89 +13,96 @@ struct FoundationModelsMangaAnalyzer {
         let appearance: String?
     }
 
-    struct Dialogue: Decodable {
-        struct Box: Decodable {
-            let x: Double
-            let y: Double
-            let width: Double
-            let height: Double
-        }
-
-        let text: String
+    struct Annotation: Decodable {
+        let lineIndex: Int
         let speakerKey: String?
-        let box: Box
-        let readingOrder: Int
         let emotion: String?
         let actingDirection: String?
     }
 
     private struct Response: Decodable {
         let speakers: [Speaker]
-        let dialogues: [Dialogue]
+        let annotations: [Annotation]
     }
 
     enum AnalysisError: LocalizedError {
         case unavailable(String)
         case invalidImage
-        case emptyResult
         case invalidResponse
 
         var errorDescription: String? {
             switch self {
             case .unavailable(let reason): return "Apple Foundation Modelsを利用できません: \(reason)"
             case .invalidImage: return "画像を読み込めませんでした。"
-            case .emptyResult: return "漫画ページからセリフを検出できませんでした。"
-            case .invalidResponse: return "AIの解析結果を読み取れませんでした。"
+            case .invalidResponse: return "話者・演技解析の結果を読み取れませんでした。"
             }
         }
     }
 
-    func analyze(image: UIImage) async throws -> (speakers: [Speaker], dialogues: [Dialogue]) {
+    func analyze(
+        image: UIImage,
+        recognizedTexts: [String],
+        knownCharacters: [CharacterVoice]
+    ) async throws -> (speakers: [Speaker], annotations: [Annotation]) {
         guard let cgImage = image.cgImage else { throw AnalysisError.invalidImage }
+        guard !recognizedTexts.isEmpty else { return ([], []) }
+
         #if canImport(FoundationModels)
         guard #available(iOS 27.0, *) else {
-            throw AnalysisError.unavailable("画像入力にはiOS 27以降が必要です。")
+            throw AnalysisError.unavailable("この機能にはiOS 27以降が必要です。")
         }
         switch SystemLanguageModel.default.availability {
-        case .available:
-            break
+        case .available: break
         case .unavailable(let reason):
             throw AnalysisError.unavailable(String(describing: reason))
         }
 
+        let known = knownCharacters.map {
+            "名前: \($0.name) / 外見: \($0.visualDescription ?? "未登録") / 声の特徴: \($0.voiceDescription)"
+        }.joined(separator: "\n")
+        let numberedLines = recognizedTexts.enumerated().map { "[\($0.offset)] \($0.element)" }.joined(separator: "\n")
+
         let session = LanguageModelSession()
         let response = try await session.respond {
             """
-            あなたは漫画ページを解析する専門家です。添付されたページ画像だけを見て、読めるセリフを抽出してください。
-            OCRテキストは別途与えられていません。画像内の日本語・英語をできるだけ原文どおりに読み取ってください。
-            吹き出し、話者、コマの配置、視線、会話の流れを手掛かりに読み順と話者を推定してください。
-            同じ人物には同じspeaker key（speaker_1, speaker_2...）を割り当て、外見の特徴をappearanceに短く記述してください。
-            話者が特定できない場合はspeakerKeyをnullにしてください。ナレーションや効果音は通常の会話と区別してください。
-            各セリフのboxは画像全体に対する正規化座標です。xとyは左上原点、widthとheightは幅と高さで、すべて0.0から1.0の範囲です。
-            boxは吹き出し全体のおおよその範囲を指定してください。座標は推定値でよく、ページ外にはみ出さないようにしてください。
-            readingOrderは最初に読むセリフを0とする整数です。
-            emotionには感情を短く、actingDirectionには声の演技指示を日本語で記述してください。
-            読めない文字を創作しないでください。確信がない場合は読めた範囲だけを記述してください。
-            出力は説明文やMarkdownを付けず、次のJSON形式だけにしてください:
-            {"speakers":[{"key":"speaker_1","name":"人物1","appearance":"黒髪で眼鏡"}],
-             "dialogues":[{"text":"セリフ","speakerKey":"speaker_1","box":{"x":0.1,"y":0.2,"width":0.3,"height":0.1},"readingOrder":0,"emotion":"驚き","actingDirection":"少し高めの声で驚いて"}]}
+            あなたは漫画の演出・配役アシスタントです。画像とOCR済みセリフ一覧を照合し、各セリフの話者と演技だけを判定してください。
+
+            最重要ルール:
+            - セリフ本文はOCR結果が正本です。本文を書き換えたり、新しいセリフを追加したりしないでください。
+            - OCR一覧の番号をlineIndexとしてそのまま使い、各行に最大1つの注釈を返してください。
+            - 吹き出しの位置、人物の口元・視線・表情、コマの連続性を手掛かりに話者を推定してください。
+            - 既知キャラクター一覧に一致する人物がいれば、その名前をそのまま使ってください。確信がない場合はspeakerKeyをnullにしてください。
+            - 新しい人物を特定できた場合だけspeakerを追加し、外見の特徴を短く書いてください。
+            - emotionは短い感情ラベル、actingDirectionは声の高さ・速さ・強さ・間・息づかいなどの演技指示を日本語で具体的に書いてください。
+            - ナレーション、効果音、環境音は人物の発話として無理に割り当てないでください。
+            - 画像だけで確定できない場合は断定せずnullにしてください。
+
+            既知キャラクター:
+            \(known.isEmpty ? "なし" : known)
+
+            OCRセリフ一覧:
+            \(numberedLines)
+
+            次のJSONだけを返してください:
+            {"speakers":[{"key":"speaker_1","name":"人物名","appearance":"外見"}],
+             "annotations":[{"lineIndex":0,"speakerKey":"speaker_1","emotion":"驚き","actingDirection":"少し息を吸ってから、短く高めの声で驚く"}]}
             """
             Attachment(cgImage)
         }
+
         let content = response.content
         guard let first = content.firstIndex(of: "{"),
-              let last = content.lastIndex(of: "}"), first <= last else {
-            throw AnalysisError.invalidResponse
-        }
-        let json = String(content[first...last])
-        guard let data = json.data(using: .utf8),
+              let last = content.lastIndex(of: "}"), first <= last,
+              let data = String(content[first...last]).data(using: .utf8),
               let decoded = try? JSONDecoder().decode(Response.self, from: data) else {
             throw AnalysisError.invalidResponse
         }
-        guard !decoded.dialogues.isEmpty else { throw AnalysisError.emptyResult }
-        return (decoded.speakers, decoded.dialogues)
+        let validAnnotations = decoded.annotations.filter {
+            recognizedTexts.indices.contains($0.lineIndex)
+        }
+        return (decoded.speakers, validAnnotations)
         #else
-        throw AnalysisError.unavailable("このSDKではFoundationModelsを利用できません。Xcode 27以降でビルドしてください。")
+        throw AnalysisError.unavailable("このSDKではFoundationModelsを利用できません。")
         #endif
     }
 }
