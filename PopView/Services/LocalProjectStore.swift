@@ -23,6 +23,21 @@ final class LocalProjectStore: ObservableObject {
         return project
     }
 
+    func addImportedItems(urls: [URL], to projectID: UUID) async throws -> Int {
+        guard let projectIndex = projects.firstIndex(where: { $0.id == projectID }) else { return 0 }
+        let destination = projectFolder(projectID)
+        let prepared = try await Task.detached(priority: .userInitiated) {
+            try MangaImportService.prepare(urls: urls, destination: destination)
+        }.value
+        guard projects.indices.contains(projectIndex),
+              projects[projectIndex].id == projectID else { return 0 }
+        projects[projectIndex].pages.append(contentsOf: prepared.map {
+            MangaPage(title: $0.title, imageFileName: $0.fileName, sourcePageIndex: $0.sourcePageIndex)
+        })
+        persist()
+        return prepared.count
+    }
+
     func addImagePages(urls: [URL], to projectID: UUID) throws {
         guard let index = projects.firstIndex(where: {$0.id == projectID}) else { return }
         let folder = projectFolder(projectID)
