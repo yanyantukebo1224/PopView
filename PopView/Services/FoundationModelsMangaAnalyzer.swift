@@ -64,7 +64,7 @@ struct FoundationModelsMangaAnalyzer {
         }
 
         let session = LanguageModelSession()
-        let prompt = Prompt {
+        let response = try await session.respond {
             """
             あなたは漫画ページを解析する専門家です。添付されたページ画像だけを見て、読めるセリフを抽出してください。
             OCRテキストは別途与えられていません。画像内の日本語・英語をできるだけ原文どおりに読み取ってください。
@@ -82,7 +82,6 @@ struct FoundationModelsMangaAnalyzer {
             """
             Attachment(cgImage)
         }
-        let response = try await session.respond(to: prompt)
         let content = response.content
         guard let first = content.firstIndex(of: "{"),
               let last = content.lastIndex(of: "}"), first <= last else {
