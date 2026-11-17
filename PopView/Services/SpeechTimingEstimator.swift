@@ -14,7 +14,7 @@ enum SpeechTimingEstimator {
             if !token.isEmpty { units.append(token) }
             return true
         }
-        if units.isEmpty { units = text.map(String.init).filter { !$0.isWhitespace } }
+        if units.isEmpty { units = text.filter { !$0.isWhitespace }.map(String.init) }
         let weights = units.map { max(1, $0.count) }
         let total = max(1, weights.reduce(0, +))
         var cursor = 0.0
