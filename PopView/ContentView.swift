@@ -101,7 +101,7 @@ private struct ProjectView: View {
                 if let project {
                     ForEach(Array(project.pages.enumerated()), id: \.element.id) { index, page in
                         NavigationLink {
-                            PageEditorView(projectID: projectID, pageID: page.id, store: store, speechEngine: speechEngine)
+                            PageEditorView(projectID: projectID, pageID: page.id, store: store, speechEngine: speechEngine, modelManager: modelManager)
                         } label: {
                             HStack {
                                 if let image = store.image(for: page, projectID: projectID) {
@@ -125,7 +125,7 @@ private struct ProjectView: View {
                     .font(.caption)
                 if modelManager.totalFiles > 0 {
                     ProgressView(value: modelManager.progress)
-                    Text("\(modelManager.completedFiles)/\(speechEngine.modelManager.totalFiles) ファイル")
+                    Text("\(modelManager.completedFiles)/\(modelManager.totalFiles) ファイル")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let error = speechEngine.downloadError {
@@ -162,6 +162,7 @@ private struct PageEditorView: View {
     let pageID: UUID
     @ObservedObject var store: LocalProjectStore
     @ObservedObject var speechEngine: LocalSpeechEngine
+    @ObservedObject var modelManager: LocalModelManager
     @State private var isAnalyzing = false
     @State private var errorMessage: String?
     @State private var showingCharacter = false
@@ -287,6 +288,7 @@ private struct PageEditorView: View {
                         }
                         try playback.load(url: localURL, timings: words)
                         activeWords = words
+                        activeRegionID = region?.id
                         playback.play()
                     } catch { errorMessage = error.localizedDescription }
                 }
@@ -361,6 +363,7 @@ private struct PageEditorView: View {
                         do {
                             try playback.load(url: url, timings: region.wordTimings)
                             activeWords = region.wordTimings
+                            activeRegionID = region.id
                             playback.play()
                         } catch { errorMessage = error.localizedDescription }
                     } label: { Label("再生", systemImage: "play.fill") }
@@ -385,6 +388,7 @@ private struct PageEditorView: View {
             let (generatedURL, result) = try await speechEngine.synthesize(region.text, referenceURL: referenceURL,
                 caption: character?.voiceDescription ?? "")
             let data = try Data(contentsOf: generatedURL)
+            try? FileManager.default.removeItem(at: generatedURL)
             let storedName = try store.storeAudio(data: data, fileExtension: "wav", projectID: projectID)
             let timings = SpeechTimingEstimator.estimate(text: region.text, duration: result.audioSeconds)
             var updated = page
