@@ -15,10 +15,6 @@ struct MangaImportService {
     private static let maximumEntryBytes: UInt64 = 160 * 1_024 * 1_024
     private static let maximumTotalBytes: UInt64 = 4 * 1_024 * 1_024 * 1_024
     private static let maximumNestingDepth = 4
-    private static let imageExtensions: Set<String> = [
-        "jpg", "jpeg", "png", "gif", "heic", "heif", "webp",
-        "bmp", "tif", "tiff", "avif", "jxl"
-    ]
     private static let archiveExtensions: Set<String> = ["zip", "cbz", "rar"]
 
     private struct Candidate {
@@ -58,8 +54,7 @@ struct MangaImportService {
 
         var pages: [PreparedMangaPage] = []
         for candidate in ordered {
-            if candidate.url.pathExtension.lowercased() == "pdf",
-               let document = PDFDocument(url: candidate.url), document.pageCount > 0 {
+            if let document = PDFDocument(url: candidate.url), document.pageCount > 0 {
                 let storedName = UUID().uuidString + ".pdf"
                 let storedURL = destination.appendingPathComponent(storedName)
                 try fm.copyItem(at: candidate.url, to: storedURL)
@@ -119,11 +114,9 @@ struct MangaImportService {
             return
         }
 
-        if ext == "pdf" {
-            if PDFDocument(url: url)?.pageCount ?? 0 > 0 {
-                state.candidates.append(Candidate(url: url, relativePath: relativePath,
-                    title: url.deletingPathExtension().lastPathComponent))
-            }
+        if let document = PDFDocument(url: url), document.pageCount > 0 {
+            state.candidates.append(Candidate(url: url, relativePath: relativePath,
+                title: url.deletingPathExtension().lastPathComponent))
             return
         }
 
@@ -141,8 +134,10 @@ struct MangaImportService {
 
         if ext == "zip" || ext == "cbz" {
             let archive = try ZIPFoundation.Archive(url: url, accessMode: .read)
-            guard archive.count <= maximumArchiveEntries else { throw ImportError.tooManyFiles }
+            var entryCount = 0
             for entry in archive {
+                entryCount += 1
+                guard entryCount <= maximumArchiveEntries else { throw ImportError.tooManyFiles }
                 guard entry.type == .file, entry.uncompressedSize <= maximumEntryBytes else { continue }
                 try addUncompressedBytes(entry.uncompressedSize, to: state)
                 guard let output = safeDestination(for: entry.path, in: archiveFolder) else { continue }
