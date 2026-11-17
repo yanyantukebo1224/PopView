@@ -279,10 +279,34 @@ private struct ProjectEditList: View {
     @ObservedObject var speechEngine: LocalSpeechEngine
     @ObservedObject var modelManager: LocalModelManager
 
+    @State private var isBatchAnalyzing = false
+    @State private var batchProgress = ""
+    @State private var batchFailures: [String] = []
+
     private var project: MangaProject? { store.projects.first(where: { $0.id == projectID }) }
 
     var body: some View {
         List {
+            Section("一括解析") {
+                Button {
+                    Task { await analyzeAllPendingPages() }
+                } label: {
+                    HStack {
+                        Label(isBatchAnalyzing ? "一括解析中…" : "未解析ページを一括解析", systemImage: "sparkles.rectangle.stack")
+                        Spacer()
+                        if isBatchAnalyzing { ProgressView() }
+                    }
+                }
+                .disabled(isBatchAnalyzing || !(project?.pages.contains(where: { $0.textRegions.isEmpty }) ?? false))
+                if !batchProgress.isEmpty {
+                    Text(batchProgress).font(.caption).foregroundStyle(.secondary)
+                }
+                if !batchFailures.isEmpty {
+                    Text("解析できなかったページ: " + batchFailures.joined(separator: "、"))
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+
             Section("ページ・解析結果") {
                 if let project, project.pages.isEmpty {
                     ContentUnavailableView("ページがありません", systemImage: "doc.text.image")
@@ -337,6 +361,48 @@ private struct ProjectEditList: View {
             }
         }
         .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
+    }
+
+    @MainActor
+    private func analyzeAllPendingPages() async {
+        guard !isBatchAnalyzing, let initialProject = project else { return }
+        isBatchAnalyzing = true
+        batchFailures = []
+        let pending = initialProject.pages.filter { $0.textRegions.isEmpty }
+        batchProgress = "準備中… 0 / \(pending.count)"
+        defer { isBatchAnalyzing = false }
+
+        var completed = 0
+        for page in pending {
+            guard let image = store.image(for: page, projectID: projectID) else {
+                batchFailures.append(page.title + "（画像を開けません）")
+                completed += 1
+                batchProgress = "\(completed) / \(pending.count) ページ"
+                continue
+            }
+            do {
+                let knownCharacters = project?.characters ?? []
+                let result = try await MangaPageAnalysisService().analyze(
+                    image: image,
+                    knownCharacters: knownCharacters
+                )
+                for character in result.newCharacters {
+                    store.addCharacter(character, to: projectID)
+                }
+                var updated = page
+                updated.textRegions = result.regions
+                store.updatePage(updated, projectID: projectID)
+            } catch {
+                batchFailures.append(page.title + "（" + error.localizedDescription + "）")
+            }
+            completed += 1
+            batchProgress = "解析済み \(completed) / \(pending.count) ページ"
+        }
+        if batchFailures.isEmpty {
+            batchProgress = "\(completed) ページの一括解析が完了しました。"
+        } else {
+            batchProgress = "\(completed) ページ中 \(batchFailures.count) ページでエラーがありました。"
+        }
     }
 }
 
