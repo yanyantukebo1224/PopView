@@ -113,6 +113,9 @@ struct MangaImportService {
 
     private static func isLikelyThumbnail(_ url: URL) -> Bool {
         let name = url.deletingPathExtension().lastPathComponent.lowercased()
+        let pathParts = url.path.lowercased().split(separator: "/")
+        let directoryMarkers = ["thumbs", "thumbnails", "previews", "cache"]
+        if pathParts.contains(where: { directoryMarkers.contains(String($0)) }) { return true }
         let tokens = ["thumbnail", "thumb", "preview", "small", "poster", "icon"]
         if tokens.contains(where: { name.contains($0) }) { return true }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -146,7 +149,7 @@ struct MangaImportService {
             return [PreparedMangaPage(fileName: sourceURL.lastPathComponent, title: title, sourcePageIndex: nil)]
         }
 
-        func write(_ cgImage: CGImage, suffix: String) throws -> String {
+        func write(_ cgImage: CGImage) throws -> String {
             let name = UUID().uuidString + ".jpg"
             let url = destination.appendingPathComponent(name)
             guard let output = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil) else {
@@ -158,8 +161,8 @@ struct MangaImportService {
         }
 
         // Remove the temporary full-spread copy once both split pages are safely written.
-        let rightName = try write(right, suffix: "right")
-        let leftName = try write(left, suffix: "left")
+        let rightName = try write(right)
+        let leftName = try write(left)
         try? FileManager.default.removeItem(at: sourceURL)
         return [
             PreparedMangaPage(fileName: rightName, title: title + " - 右ページ", sourcePageIndex: nil),
