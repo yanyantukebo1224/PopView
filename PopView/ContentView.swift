@@ -124,8 +124,8 @@ private struct ProjectView: View {
                 Label(speechEngine.modelStatus, systemImage: modelManager.isInstalled ? "checkmark.circle.fill" : "arrow.down.circle")
                     .font(.caption)
                 if modelManager.totalFiles > 0 {
-                    ProgressView(value: modelManager.progress)
-                    Text("\(modelManager.completedFiles)/\(modelManager.totalFiles) ファイル")
+                    ProgressView()
+                    Text("取得済み \(modelManager.completedFiles)/\(modelManager.totalFiles) ファイル（ファイル単位の検証中）")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let error = speechEngine.downloadError {
