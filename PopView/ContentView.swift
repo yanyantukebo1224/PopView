@@ -226,7 +226,7 @@ private struct PageEditorView: View {
                 Form {
                     TextField("キャラクター名", text: $characterName)
                     Section {
-                        Text("参照音声の登録UIとゼロショット音声生成は、IrodoriのCore ML入出力仕様を確定後に接続します。")
+                        Text("キャラクターごとに使用許可のある参照音声を登録すると、その声を使ってセリフを生成できます。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -266,13 +266,21 @@ private struct PageEditorView: View {
                 let localURL = store.audioURL(name: name, projectID: projectID)
                 let asset = AVURLAsset(url: localURL)
                 Task {
-                    let loadedDuration = try await asset.load(.duration)
-                    let duration = loadedDuration.seconds
-                    let region = selectedAudioRegion
-                    let words = region.map { estimatedTimings(text: $0.text, duration: duration) } ?? []
-                    try playback.load(url: localURL, timings: words)
-                    activeWords = words
-                    playback.play()
+                    do {
+                        let loadedDuration = try await asset.load(.duration)
+                        let duration = loadedDuration.seconds
+                        let region = selectedAudioRegion
+                        let words = region.map { SpeechTimingEstimator.estimate(text: $0.text, duration: duration) } ?? []
+                        if var updated = page, let region,
+                           let index = updated.textRegions.firstIndex(where: { $0.id == region.id }) {
+                            updated.textRegions[index].audioFileName = name
+                            updated.textRegions[index].wordTimings = words
+                            store.updatePage(updated, projectID: projectID)
+                        }
+                        try playback.load(url: localURL, timings: words)
+                        activeWords = words
+                        playback.play()
+                    } catch { errorMessage = error.localizedDescription }
                 }
             } catch { errorMessage = error.localizedDescription }
         }
@@ -424,11 +432,6 @@ private struct PageEditorView: View {
     }
 
     private func estimatedTimings(text: String, duration: TimeInterval) -> [WordTiming] {
-        let units = text.map(String.init).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        guard !units.isEmpty else { return [] }
-        let step = duration / Double(units.count)
-        return units.enumerated().map { index, unit in
-            WordTiming(text: unit, start: Double(index) * step, end: Double(index + 1) * step)
-        }
+        SpeechTimingEstimator.estimate(text: text, duration: duration)
     }
 }
