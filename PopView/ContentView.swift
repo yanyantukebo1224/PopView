@@ -534,6 +534,7 @@ private struct PageEditorView: View {
     @State private var showingCharacter = false
     @State private var characterName = ""
     @State private var characterVoiceDescription = ""
+    @State private var characterVisualDescription = ""
     @State private var activeRegionID: UUID?
     @State private var selectedAudioRegion: SpeechRegion?
     @State private var activeWords: [WordTiming] = []
@@ -602,6 +603,7 @@ private struct PageEditorView: View {
             NavigationStack {
                 Form {
                     TextField("キャラクター名", text: $characterName)
+                    TextField("外見の特徴（髪型・服装など）", text: $characterVisualDescription, axis: .vertical)
                     TextField("声・話し方の指示（任意）", text: $characterVoiceDescription, axis: .vertical)
                     Section {
                         Text("キャラクターごとに使用許可のある参照音声を登録すると、その声を使ってセリフを生成できます。")
@@ -617,9 +619,10 @@ private struct PageEditorView: View {
                             if !name.isEmpty {
                                 var character = CharacterVoice(name: name)
                                 character.voiceDescription = characterVoiceDescription
+                                character.visualDescription = characterVisualDescription.isEmpty ? nil : characterVisualDescription
                                 store.addCharacter(character, to: projectID)
                             }
-                            characterName = ""; characterVoiceDescription = ""; showingCharacter = false
+                            characterName = ""; characterVoiceDescription = ""; characterVisualDescription = ""; showingCharacter = false
                         }
                     }
                 }
