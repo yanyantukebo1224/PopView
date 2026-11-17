@@ -34,15 +34,27 @@ final class LocalProjectStore: ObservableObject {
 
     func deletePages(at offsets: IndexSet, from projectID: UUID) {
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
-        projects[index].pages.remove(atOffsets: offsets)
+        projects[index].pages = projects[index].pages.enumerated()
+            .filter { !offsets.contains($0.offset) }
+            .map(\.element)
         persist()
     }
 
     func addImportedItems(urls: [URL], to projectID: UUID) async throws -> Int {
         guard let projectIndex = projects.firstIndex(where: { $0.id == projectID }) else { return 0 }
         let destination = projectFolder(projectID)
+        // Keep each security-scoped grant alive until the coordinated copy
+        // into the app container has completed.
+        let scopedURLs = urls.map { url in
+            (url, url.startAccessingSecurityScopedResource())
+        }
+        defer {
+            for (url, didStart) in scopedURLs where didStart {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
         let prepared = try await Task.detached(priority: .userInitiated) {
-            try MangaImportService.prepare(urls: urls, destination: destination)
+            try MangaImportService.prepare(urls: scopedURLs.map(\.0), destination: destination)
         }.value
         guard projects.indices.contains(projectIndex),
               projects[projectIndex].id == projectID else { return 0 }
