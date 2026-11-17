@@ -12,6 +12,9 @@ struct ContentView: View {
     @State private var showingNewProject = false
     @State private var newTitle = ""
     @State private var errorMessage: String?
+    @State private var isScanningInbox = false
+    @State private var inboxMessage: String?
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -21,7 +24,28 @@ struct ContentView: View {
                 ModelStartupView(speechEngine: speechEngine)
             }
         }
-        .task { await speechEngine.installModelAtLaunch() }
+        .task {
+            await speechEngine.installModelAtLaunch()
+            if speechEngine.isStartupReady { await scanInbox() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active && speechEngine.isStartupReady {
+                Task { await scanInbox() }
+            }
+        }
+    }
+
+    @MainActor
+    private func scanInbox() async {
+        guard !isScanningInbox else { return }
+        isScanningInbox = true
+        defer { isScanningInbox = false }
+        do {
+            let count = try await store.importInboxItems()
+            inboxMessage = count > 0 ? "\(count)ページをライブラリに追加しました。" : "新しいファイルはありません。"
+        } catch {
+            inboxMessage = "取り込みに失敗しました: " + error.localizedDescription
+        }
     }
 
     private var mainInterface: some View {
@@ -35,6 +59,28 @@ struct ContentView: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 8)
+                }
+
+                Section("ファイルアプリから自動取り込み") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("このiPhone内 > PopView > Import", systemImage: "folder.badge.plus")
+                            .font(.subheadline.weight(.semibold))
+                        Text("画像・PDF・ZIP・CBZ・RAR、または漫画フォルダをここに置いてください。PopView起動時やアプリに戻ったときに自動で読み込みます。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("取り込み済みファイルは「Imported」へ移動します。")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Button {
+                            Task { await scanInbox() }
+                        } label: {
+                            Label(isScanningInbox ? "確認中…" : "Importフォルダを今すぐ確認",
+                                  systemImage: "arrow.clockwise")
+                        }
+                        .disabled(isScanningInbox)
+                        if let inboxMessage {
+                            Text(inboxMessage).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
                 }
 
                 Section("ライブラリ") {
