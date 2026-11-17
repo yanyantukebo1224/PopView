@@ -166,6 +166,8 @@ private struct PageEditorView: View {
     @State private var errorMessage: String?
     @State private var showingCharacter = false
     @State private var characterName = ""
+    @State private var characterVoiceDescription = ""
+    @State private var activeRegionID: UUID?
     @State private var selectedAudioRegion: SpeechRegion?
     @State private var activeWords: [WordTiming] = []
     @State private var showingAudioImporter = false
@@ -226,6 +228,7 @@ private struct PageEditorView: View {
             NavigationStack {
                 Form {
                     TextField("キャラクター名", text: $characterName)
+                    TextField("声・話し方の指示（任意）", text: $characterVoiceDescription, axis: .vertical)
                     Section {
                         Text("キャラクターごとに使用許可のある参照音声を登録すると、その声を使ってセリフを生成できます。")
                             .font(.caption).foregroundStyle(.secondary)
@@ -237,8 +240,12 @@ private struct PageEditorView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("追加") {
                             let name = characterName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !name.isEmpty { store.addCharacter(CharacterVoice(name: name), to: projectID) }
-                            characterName = ""; showingCharacter = false
+                            if !name.isEmpty {
+                                var character = CharacterVoice(name: name)
+                                character.voiceDescription = characterVoiceDescription
+                                store.addCharacter(character, to: projectID)
+                            }
+                            characterName = ""; characterVoiceDescription = ""; showingCharacter = false
                         }
                     }
                 }
@@ -290,7 +297,7 @@ private struct PageEditorView: View {
         } message: { Text(errorMessage ?? "") }
     }
 
-    private var playbackRegionID: UUID? { nil }
+    private var playbackRegionID: UUID? { playback.isPlaying ? activeRegionID : nil }
 
     private func analyze(_ image: UIImage, page: MangaPage) async {
         isAnalyzing = true
@@ -388,6 +395,7 @@ private struct PageEditorView: View {
             let localURL = store.audioURL(name: storedName, projectID: projectID)
             try playback.load(url: localURL, timings: timings)
             activeWords = timings
+            activeRegionID = region.id
             playback.play()
         } catch { errorMessage = error.localizedDescription }
     }
