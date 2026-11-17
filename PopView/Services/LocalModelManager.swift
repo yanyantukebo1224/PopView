@@ -27,7 +27,7 @@ final class LocalModelManager: ObservableObject {
         return .standard
     }
 
-    func installIfNeeded() async {
+    func installIfNeeded() async throws {
         do {
             try fileManager.createDirectory(at: modelsRoot, withIntermediateDirectories: true)
             let variant = selectedVariant
