@@ -416,10 +416,11 @@ private struct MangaReaderView: View {
     private var project: MangaProject? { store.projects.first(where: { $0.id == projectID }) }
 
     var body: some View {
-        Group {
-            if let project, !project.pages.isEmpty {
-                VStack(spacing: 0) {
-                    TabView(selection: $selectedPageIndex) {
+        GeometryReader { geometry in
+            Group {
+                if let project, !project.pages.isEmpty {
+                    VStack(spacing: 0) {
+                        TabView(selection: $selectedPageIndex) {
                         ForEach(Array(project.pages.enumerated()), id: \.element.id) { index, page in
                             ScrollView {
                                 VStack(alignment: .leading, spacing: 14) {
@@ -427,6 +428,10 @@ private struct MangaReaderView: View {
                                         Image(uiImage: image)
                                             .resizable()
                                             .scaledToFit()
+                                            .frame(
+                                                maxWidth: min(max(geometry.size.width - 24, 1), 900),
+                                                maxHeight: geometry.size.height * (geometry.size.width > geometry.size.height ? 0.78 : 0.88)
+                                            )
                                             .frame(maxWidth: .infinity)
                                             .padding(.horizontal, 8)
                                     } else {
@@ -495,9 +500,10 @@ private struct MangaReaderView: View {
                     .padding(.horizontal)
                     .padding(.vertical, 10)
                     .background(.bar)
+                    }
+                } else {
+                    ContentUnavailableView("読むページがありません", systemImage: "book")
                 }
-            } else {
-                ContentUnavailableView("読むページがありません", systemImage: "book")
             }
         }
         .onChange(of: project?.pages.count ?? 0) { _, count in
