@@ -157,7 +157,7 @@ private struct PageEditorView: View {
     @State private var errorMessage: String?
     @State private var showingCharacter = false
     @State private var characterName = ""
-    @State private var selectedAudioRegion: SpeechRegion?
+    @State private var selectedAudioRegion: SpeechRegion?\n    @State private var activeWords: [WordTiming] = []
     @State private var showingAudioImporter = false
     @StateObject private var playback = KaraokePlaybackController()
 
