@@ -175,6 +175,7 @@ private struct PageEditorView: View {
     @State private var showingReferenceImporter = false
     @State private var selectedCharacterID: UUID?
     @State private var generatingRegionID: UUID?
+    @State private var analysisNotice: String?
     @StateObject private var playback = KaraokePlaybackController()
 
     private var project: MangaProject? { store.projects.first(where: {$0.id == projectID}) }
@@ -201,13 +202,18 @@ private struct PageEditorView: View {
                         }
                         HStack {
                             Button { Task { await analyze(image, page: page) } } label: {
-                                Label(isAnalyzing ? "解析中…" : "吹き出し・OCR解析", systemImage: "text.viewfinder")
+                                Label(isAnalyzing ? "解析中…" : "AI画像解析", systemImage: "sparkles")
                             }
                             .disabled(isAnalyzing)
                             Spacer()
                             Button { showingCharacter = true } label: {
                                 Label("キャラ追加", systemImage: "person.badge.plus")
                             }
+                        }
+                        if let analysisNotice {
+                            Text(analysisNotice)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         if !page.textRegions.isEmpty {
                             karaokeControls(page: page)
@@ -303,26 +309,88 @@ private struct PageEditorView: View {
 
     private func analyze(_ image: UIImage, page: MangaPage) async {
         isAnalyzing = true
+        analysisNotice = nil
         defer { isAnalyzing = false }
+
+        // Primary path: analyze the page pixels directly with Apple's on-device
+        // multimodal Foundation Model. This path does not run a separate OCR pass.
         do {
-            let analyzer = MangaAnalyzer()
-            let text = try await analyzer.recognizeText(in: image)
-            let boxes = try await analyzer.detectBalloonCandidates(in: image)
-            var regions = text.map { item in
-                SpeechRegion(text: item.text, box: CGRectCodable(item.box), confidence: item.confidence)
-            }
-            // Prefer detected rectangular balloon bounds that contain each OCR line.
-            for index in regions.indices {
-                let center = regions[index].box.cgRect
-                if let candidate = boxes.filter({ $0.insetBy(dx: -0.025, dy: -0.025).contains(center) })
-                    .min(by: { $0.width * $0.height < $1.width * $1.height }) {
-                    regions[index].box = CGRectCodable(candidate)
+            let result = try await FoundationModelsMangaAnalyzer().analyze(image: image)
+            var speakerIDs: [String: UUID] = [:]
+
+            for speaker in result.speakers {
+                if let existing = store.projects.first(where: { $0.id == projectID })?
+                    .characters.first(where: { $0.name == speaker.name }) {
+                    speakerIDs[speaker.key] = existing.id
+                } else {
+                    var character = CharacterVoice(name: speaker.name)
+                    character.visualDescription = speaker.appearance
+                    store.addCharacter(character, to: projectID)
+                    speakerIDs[speaker.key] = character.id
                 }
+            }
+
+            let regions = result.dialogues
+                .sorted { $0.readingOrder < $1.readingOrder }
+                .compactMap { dialogue -> SpeechRegion? in
+                    let x = min(max(dialogue.box.x, 0), 1)
+                    let y = min(max(dialogue.box.y, 0), 1)
+                    let width = min(max(dialogue.box.width, 0), 1 - x)
+                    let height = min(max(dialogue.box.height, 0), 1 - y)
+                    guard width > 0.005, height > 0.005,
+                          !dialogue.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        return nil
+                    }
+                    // Foundation Models uses a top-left origin; stored page geometry
+                    // follows Vision's normalized lower-left origin.
+                    let rect = CGRect(x: x, y: 1 - y - height, width: width, height: height)
+                    var region = SpeechRegion(
+                        text: dialogue.text,
+                        box: CGRectCodable(rect),
+                        speakerID: dialogue.speakerKey.flatMap { speakerIDs[$0] },
+                        confidence: 0.55
+                    )
+                    region.speakerLabel = dialogue.speakerKey
+                    region.emotion = dialogue.emotion
+                    region.actingDirection = dialogue.actingDirection
+                    region.readingOrder = dialogue.readingOrder
+                    return region
+                }
+
+            guard !regions.isEmpty else {
+                throw FoundationModelsMangaAnalyzer.AnalysisError.emptyResult
             }
             var updated = page
             updated.textRegions = regions
             store.updatePage(updated, projectID: projectID)
-        } catch { errorMessage = error.localizedDescription }
+            analysisNotice = "Apple Foundation Modelsで画像を直接解析しました。座標・話者・セリフは推定結果なので確認してください。"
+            return
+        } catch {
+            // Fallback for older OS versions, unavailable Apple Intelligence,
+            // or an image response that could not be parsed.
+            let aiReason = error.localizedDescription
+            do {
+                let analyzer = MangaAnalyzer()
+                let text = try await analyzer.recognizeText(in: image)
+                let boxes = try await analyzer.detectBalloonCandidates(in: image)
+                var regions = text.map { item in
+                    SpeechRegion(text: item.text, box: CGRectCodable(item.box), confidence: item.confidence)
+                }
+                for index in regions.indices {
+                    let center = regions[index].box.cgRect
+                    if let candidate = boxes.filter({ $0.insetBy(dx: -0.025, dy: -0.025).contains(center) })
+                        .min(by: { $0.width * $0.height < $1.width * $1.height }) {
+                        regions[index].box = CGRectCodable(candidate)
+                    }
+                }
+                var updated = page
+                updated.textRegions = regions
+                store.updatePage(updated, projectID: projectID)
+                analysisNotice = "Foundation Modelsを利用できなかったため、Vision OCRに切り替えました。理由: \(aiReason)"
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func regionEditor(_ region: SpeechRegion, page: MangaPage) -> some View {
