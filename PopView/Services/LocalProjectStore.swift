@@ -258,9 +258,63 @@ final class LocalProjectStore: ObservableObject {
     }
 
     func storeAudio(data: Data, fileExtension: String, projectID: UUID) throws -> String {
-        let name = UUID().uuidString + "." + fileExtension
+        let ext = fileExtension.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        let name = UUID().uuidString + "." + (ext.isEmpty ? "m4a" : ext)
+        try FileManager.default.createDirectory(at: projectFolder(projectID), withIntermediateDirectories: true)
         try data.write(to: projectFolder(projectID).appendingPathComponent(name), options: .atomic)
         return name
+    }
+
+    /// Reads provider-backed audio through NSFileCoordinator before copying it locally.
+    func importAudioFile(from sourceURL: URL, projectID: UUID) throws -> String {
+        let didStart = sourceURL.startAccessingSecurityScopedResource()
+        defer { if didStart { sourceURL.stopAccessingSecurityScopedResource() } }
+        var coordinatedData: Data?
+        var coordinationError: NSError?
+        var readError: Error?
+        NSFileCoordinator(filePresenter: nil).coordinate(
+            readingItemAt: sourceURL,
+            options: [],
+            error: &coordinationError
+        ) { readableURL in
+            do { coordinatedData = try Data(contentsOf: readableURL, options: [.mappedIfSafe]) }
+            catch { readError = error }
+        }
+        if let coordinationError { throw coordinationError }
+        if let readError { throw readError }
+        guard let data = coordinatedData, !data.isEmpty else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return try storeAudio(data: data, fileExtension: sourceURL.pathExtension, projectID: projectID)
+    }
+
+    private var voiceLibraryRootURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("VoiceLibrary", isDirectory: true)
+    }
+
+    func referenceAudioFolder(projectID: UUID, characterName: String) throws -> URL {
+        let projectName = projects.first(where: { $0.id == projectID })?.title ?? "作品"
+        func safe(_ value: String) -> String {
+            let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: ":", with: "_")
+            return cleaned.isEmpty ? "未設定" : cleaned
+        }
+        let folder = voiceLibraryRootURL
+            .appendingPathComponent(safe(projectName), isDirectory: true)
+            .appendingPathComponent(safe(characterName), isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    func availableReferenceAudioURLs(projectID: UUID, characterName: String) -> [URL] {
+        guard let folder = try? referenceAudioFolder(projectID: projectID, characterName: characterName) else { return [] }
+        let allowed: Set<String> = ["wav", "m4a", "mp3", "aiff", "aif", "caf", "aac", "flac"]
+        return ((try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
+        )) ?? []).filter { allowed.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 
     func audioURL(name: String, projectID: UUID) -> URL {
