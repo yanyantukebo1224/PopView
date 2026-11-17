@@ -212,20 +212,12 @@ private struct ProjectView: View {
     @ObservedObject var store: LocalProjectStore
     @ObservedObject var speechEngine: LocalSpeechEngine
     @ObservedObject var modelManager: LocalModelManager
-    @State private var showingImporter = false
     @State private var errorMessage: String?
-    @State private var selectedPageID: UUID?
-    @State private var isImporting = false
 
     private var project: MangaProject? { store.projects.first(where: {$0.id == projectID}) }
 
     var body: some View {
         List {
-            Section {
-                Button { showingImporter = true } label: {
-                    Label("漫画ファイル・ZIP・RAR・フォルダを追加", systemImage: "plus.rectangle.on.folder")
-                }
-            }
             Section("ページ") {
                 if let project, project.pages.isEmpty {
                     ContentUnavailableView("ページがありません", systemImage: "doc.text.image")
@@ -271,41 +263,6 @@ private struct ProjectView: View {
         .navigationTitle(project?.title ?? "作品")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
-        .fileImporter(isPresented: $showingImporter,
-                      allowedContentTypes: [
-                        .image, .pdf, .zip, .folder,
-                        UTType(filenameExtension: "cbz") ?? .zip,
-                        UTType(filenameExtension: "rar") ?? .archive
-                      ],
-                      allowsMultipleSelection: true) { result in
-            do {
-                let urls = try result.get()
-                guard !urls.isEmpty else { return }
-                isImporting = true
-                Task {
-                    defer { isImporting = false }
-                    do {
-                        let count = try await store.addImportedItems(urls: urls, to: projectID)
-                        if count == 0 { errorMessage = "読み込めるページがありませんでした。" }
-                    } catch {
-                        errorMessage = error.localizedDescription
-                    }
-                }
-            } catch { errorMessage = error.localizedDescription }
-        }
-        .overlay {
-            if isImporting {
-                ZStack {
-                    Color.black.opacity(0.25).ignoresSafeArea()
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("漫画ファイルを解析・取り込み中…").font(.headline)
-                    }
-                    .padding(24)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                }
-            }
-        }
         .alert("読み込みエラー", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
