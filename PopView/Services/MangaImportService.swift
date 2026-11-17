@@ -29,6 +29,9 @@ struct MangaImportService {
         var visitedFiles = 0
     }
 
+    /// File-provider URLs are first coordinated and copied into the app's
+    /// container. The scanner then works only with local files, avoiding
+    /// expired security scopes and iCloud/File Provider placeholder URLs.
     static func prepare(urls: [URL], destination: URL) throws -> [PreparedMangaPage] {
         let fm = FileManager.default
         try fm.createDirectory(at: destination, withIntermediateDirectories: true)
@@ -37,11 +40,40 @@ struct MangaImportService {
         defer { try? fm.removeItem(at: staging) }
 
         let state = ScanState()
-        for (index, url) in urls.enumerated() {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            try collect(url: url, relativePath: String(format: "%04d/", index) + url.lastPathComponent,
-                        staging: staging, state: state, depth: 0)
+        for (index, sourceURL) in urls.enumerated() {
+            let values = try? sourceURL.resourceValues(forKeys: [.isDirectoryKey])
+            let isDirectory = values?.isDirectory == true
+            let coordinatedName = String(format: "%04d-", index) + safeFileName(sourceURL.lastPathComponent)
+            let targetExtension = isDirectory ? "zip" : sourceURL.pathExtension
+            let localName = targetExtension.isEmpty
+                ? coordinatedName
+                : URL(fileURLWithPath: coordinatedName).deletingPathExtension().lastPathComponent + "." + targetExtension
+            let localURL = staging.appendingPathComponent(localName)
+
+            var coordinationError: NSError?
+            var copyError: Error?
+            let coordinator = NSFileCoordinator(filePresenter: nil)
+            coordinator.coordinate(
+                readingItemAt: sourceURL,
+                options: isDirectory ? .forUploading : [],
+                error: &coordinationError
+            ) { coordinatedURL in
+                do {
+                    try fm.copyItem(at: coordinatedURL, to: localURL)
+                } catch {
+                    copyError = error
+                }
+            }
+            if let coordinationError { throw ImportError.fileAccessFailed(sourceURL.lastPathComponent, coordinationError.localizedDescription) }
+            if let copyError { throw copyError }
+
+            try collect(
+                url: localURL,
+                relativePath: String(format: "%04d/", index) + sourceURL.lastPathComponent,
+                staging: staging,
+                state: state,
+                depth: 0
+            )
         }
 
         guard !state.candidates.isEmpty else {
@@ -74,6 +106,12 @@ struct MangaImportService {
         return pages
     }
 
+    private static func safeFileName(_ name: String) -> String {
+        let cleaned = name.replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+        return cleaned.isEmpty ? "imported-file" : cleaned
+    }
+
     private static func collect(url: URL, relativePath: String, staging: URL,
                                 state: ScanState, depth: Int) throws {
         guard depth <= maximumNestingDepth else { return }
@@ -91,8 +129,6 @@ struct MangaImportService {
                     if childValues?.isDirectory == true { enumerator.skipDescendants() }
                     continue
                 }
-                // The directory enumerator is already recursive. Let it descend
-                // naturally instead of scanning a nested folder twice.
                 if childValues?.isDirectory == true { continue }
                 let relative = child.path.replacingOccurrences(of: url.path + "/", with: "")
                 try collect(url: child, relativePath: relativePath + "/" + relative,
@@ -196,11 +232,12 @@ struct MangaImportService {
         case archiveTooLarge
         case encryptedRAR
         case unsupportedRARVolume
+        case fileAccessFailed(String, String)
 
         var errorDescription: String? {
             switch self {
             case .noReadablePages:
-                return "選択したファイル内に読み込める画像またはPDFがありませんでした。"
+                return "選択したファイル内に読み込める画像またはPDFがありませんでした。画像・PDF・ZIP/CBZ/RAR、またはそれらを含むフォルダを選択してください。"
             case .tooManyFiles:
                 return "ファイル数が多すぎるため、安全のため読み込みを中止しました。"
             case .archiveTooLarge:
@@ -209,6 +246,8 @@ struct MangaImportService {
                 return "パスワード付きRARには現在対応していません。"
             case .unsupportedRARVolume:
                 return "分割RARの途中ファイルです。最初のRARファイルを選択してください。"
+            case .fileAccessFailed(let name, let reason):
+                return "「\(name)」をファイルアプリから読み取れませんでした。ファイルを端末にダウンロードしてから再度選択してください。\n\(reason)"
             }
         }
     }
