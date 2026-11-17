@@ -31,11 +31,37 @@ final class LocalProjectStore: ObservableObject {
         }.value
         guard projects.indices.contains(projectIndex),
               projects[projectIndex].id == projectID else { return 0 }
-        projects[projectIndex].pages.append(contentsOf: prepared.map {
+
+        var ordered = prepared
+        if (2...12).contains(prepared.count) {
+            let pageNumbers = prepared.map { item -> Int? in
+                let digits = item.title.reversed().prefix { $0.isNumber }.reversed()
+                return digits.isEmpty ? nil : Int(String(digits))
+            }
+            let reliableNumbering = pageNumbers.allSatisfy { $0 != nil }
+                && Set(pageNumbers.compactMap { $0 }).count == prepared.count
+                && ((pageNumbers.compactMap { $0 }.max() ?? 0)
+                    - (pageNumbers.compactMap { $0 }.min() ?? 0) <= prepared.count * 3)
+            if !reliableNumbering {
+                let thumbnails = prepared.compactMap { item -> UIImage? in
+                    let url = destination.appendingPathComponent(item.fileName)
+                    if item.fileName.lowercased().hasSuffix(".pdf") {
+                        return PDFPageRenderer.render(url: url, pageIndex: item.sourcePageIndex ?? 0)
+                    }
+                    return UIImage(contentsOfFile: url.path)
+                }
+                if thumbnails.count == prepared.count,
+                   let visualOrder = await MangaImportOrderAssistant.suggestedOrder(for: thumbnails) {
+                    ordered = visualOrder.map { prepared[$0] }
+                }
+            }
+        }
+
+        projects[projectIndex].pages.append(contentsOf: ordered.map {
             MangaPage(title: $0.title, imageFileName: $0.fileName, sourcePageIndex: $0.sourcePageIndex)
         })
         persist()
-        return prepared.count
+        return ordered.count
     }
 
     func addImagePages(urls: [URL], to projectID: UUID) throws {
