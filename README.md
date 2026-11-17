@@ -2,13 +2,14 @@
 
 **漫画を、声と動きで楽しむローカル完結型ビューア。**
 
-PopViewは漫画ページを端末に取り込み、Vision OCRでセリフ候補を抽出し、キャラクターごとの参照音声を使ってIrodori-TTSで音声化し、ページ表示と字幕ハイライトを同期するiOSアプリです。
+PopViewは漫画ページを端末に取り込み、iOS 27以降ではApple Foundation Modelsで画像を直接解析してセリフ・話者・読み順・演技指示を推定します。AI解析が利用できない場合はVision OCRへフォールバックし、キャラクターごとの参照音声を使ってIrodori-TTSで音声化、ページ表示と字幕ハイライトを同期するiOSアプリです。
 
 ## 開発方針
 
 - iPhone / iPad向けSwiftUIアプリ（iOS 17以降）
 - 作品・ページ・キャラクター・参照音声・生成音声を端末内に保存
-- Vision OCRと矩形候補検出でセリフ領域を抽出
+- iOS 27以降はFoundation Modelsの画像入力でOCR工程を分離せず漫画ページを直接解析
+- Foundation Modelsが利用できない場合はVision OCRと矩形候補検出へフォールバック
 - Irodori-TTS v4.1 Small MF Core ML版をSwift SDK経由で利用
 - 初回起動時にモデルをダウンロードし、SHA-256検証後に端末へ保存
 - モデル取得後の音声生成はCore MLでローカル実行
@@ -31,14 +32,16 @@ Irodori Swift SDK 0.2.0をSwift Package ManagerのExact Versionで固定して�
 - [x] 作品単位でページ・音声素材を保存
 
 ### M2 — 漫画解析
-- [x] 日本語/英語Vision OCR
-- [x] 矩形領域候補検出
-- [x] OCR結果の編集
-- [x] キャラクター作成・セリフへの話者割り当て
+- [x] iOS 27以降のApple Foundation Models画像入力
+- [x] 画像からセリフ本文・話者候補・外見説明をまとめて推定
+- [x] 読み順・感情・音声向け演技指示の推定
+- [x] セリフ領域の概算座標を生成
+- [x] Foundation Modelsが利用できない場合の日本語/英語Vision OCRフォールバック
+- [x] 解析結果の編集・話者の手動割り当て
 - [x] キャラクターごとの参照音声ファイル登録
-- [ ] 吹き出しの意味的な分類・複雑な漫画レイアウトの読み順推定は今後の精度改善対象
+- [ ] 吹き出し座標・話者・縦書きや複雑な漫画レイアウトの精度検証と改善
 
-※現状の矩形検出は吹き出し候補を提案するもので、吹き出しを完全に意味理解するAIではありません。OCR結果は編集できます。
+※iOS 27のFoundation Models画像解析は別途OCRテキストを必要としません。ただし言語モデルが返す吹き出し座標は推定値であり、ピクセル単位の検出結果ではありません。誤読・話者誤認もあり得るため、生成結果の確認と修正が必要です。iOS 17〜26、モデル未準備、解析失敗時はVision OCRへ自動で切り替えます。
 
 ### M3 — 音声
 - [x] Irodori-TTS v4.1 Small MF Core ML Swift SDK 0.2.0接続
@@ -62,7 +65,8 @@ Irodori Swift SDK 0.2.0をSwift Package ManagerのExact Versionで固定して�
 
 - SwiftUI: UI / 作品・ページ管理
 - PDFKit: PDFページレンダリング
-- Vision: OCR・矩形候補検出
+- Foundation Models: iOS 27以降のオンデバイス画像理解・構造化解析
+- Vision: OCRフォールバック・矩形候補検出
 - IrodoriTTS Swift SDK: モデル取得・検証・Core ML推論・参照音声
 - Core ML: 端末内モデル推論
 - NaturalLanguage: 日本語テキスト分割
