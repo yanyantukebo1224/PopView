@@ -29,7 +29,7 @@ struct ContentView: View {
                 Section("ライブラリ") {
                     if store.projects.isEmpty {
                         ContentUnavailableView("作品がありません", systemImage: "books.vertical",
-                            description: Text("新しい作品を作成して、画像またはPDFを読み込みます。"))
+                            description: Text("画像・PDF・ZIP・RAR・フォルダをまとめて読み込めます。"))
                     }
                     ForEach(store.projects) { project in
                         NavigationLink {
@@ -84,6 +84,7 @@ private struct ProjectView: View {
     @State private var showingImporter = false
     @State private var errorMessage: String?
     @State private var selectedPageID: UUID?
+    @State private var isImporting = false
 
     private var project: MangaProject? { store.projects.first(where: {$0.id == projectID}) }
 
@@ -91,7 +92,7 @@ private struct ProjectView: View {
         List {
             Section {
                 Button { showingImporter = true } label: {
-                    Label("画像・PDFを追加", systemImage: "plus.rectangle.on.folder")
+                    Label("漫画ファイル・ZIP・RAR・フォルダを追加", systemImage: "plus.rectangle.on.folder")
                 }
             }
             Section("ページ") {
@@ -138,18 +139,39 @@ private struct ProjectView: View {
         .navigationTitle(project?.title ?? "作品")
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(isPresented: $showingImporter,
-                      allowedContentTypes: [.image, .pdf],
+                      allowedContentTypes: [
+                        .image, .pdf, .zip, .folder,
+                        UTType(filenameExtension: "cbz") ?? .zip,
+                        UTType(filenameExtension: "rar") ?? .archive
+                      ],
                       allowsMultipleSelection: true) { result in
             do {
                 let urls = try result.get()
-                for url in urls {
-                    if url.pathExtension.lowercased() == "pdf" {
-                        try store.addPDF(url: url, to: projectID)
-                    } else {
-                        try store.addImagePages(urls: [url], to: projectID)
+                guard !urls.isEmpty else { return }
+                isImporting = true
+                Task {
+                    defer { isImporting = false }
+                    do {
+                        let count = try await store.addImportedItems(urls: urls, to: projectID)
+                        if count == 0 { errorMessage = "読み込めるページがありませんでした。" }
+                    } catch {
+                        errorMessage = error.localizedDescription
                     }
                 }
             } catch { errorMessage = error.localizedDescription }
+        }
+        .overlay {
+            if isImporting {
+                ZStack {
+                    Color.black.opacity(0.25).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("漫画ファイルを解析・取り込み中…").font(.headline)
+                    }
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                }
+            }
         }
         .alert("読み込みエラー", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
