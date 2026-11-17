@@ -72,7 +72,7 @@ struct ContentView: View {
                 Button("OK", role: .cancel) { errorMessage = nil }
             } message: { Text(errorMessage ?? "") }
         }
-        .task { await speechEngine.loadBundledModels() }
+        .task { await speechEngine.installModelAtLaunch() }
     }
 }
 
@@ -119,10 +119,18 @@ private struct ProjectView: View {
                     }
                 }
             }
-            Section("音声エンジン") {
-                Label(speechEngine.modelStatus, systemImage: speechEngine.isReady ? "checkmark.circle" : "cpu")
+            Section("音声モデル") {
+                Label(speechEngine.modelStatus, systemImage: speechEngine.modelManager.isInstalled ? "checkmark.circle.fill" : "arrow.down.circle")
                     .font(.caption)
-                Text("Irodori-TTSの実際の推論処理・Tokenizer・Codec接続はモデル構成の確定後に必要です。")
+                if speechEngine.modelManager.totalFiles > 0 {
+                    ProgressView(value: speechEngine.modelManager.progress)
+                    Text("\(speechEngine.modelManager.completedFiles)/\(speechEngine.modelManager.totalFiles) ファイル")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if let error = speechEngine.downloadError {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                }
+                Text("初回起動時にIrodori-TTS Core MLモデルを取得します。取得後の音声生成は端末内で動作します。")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }
@@ -160,6 +168,9 @@ private struct PageEditorView: View {
     @State private var selectedAudioRegion: SpeechRegion?
     @State private var activeWords: [WordTiming] = []
     @State private var showingAudioImporter = false
+    @State private var showingReferenceImporter = false
+    @State private var selectedCharacterID: UUID?
+    @State private var generatingRegionID: UUID?
     @StateObject private var playback = KaraokePlaybackController()
 
     private var project: MangaProject? { store.projects.first(where: {$0.id == projectID}) }
@@ -233,6 +244,18 @@ private struct PageEditorView: View {
             }
             .presentationDetents([.medium])
         }
+        .fileImporter(isPresented: $showingReferenceImporter, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
+            do {
+                guard let url = try result.get().first, let selectedCharacterID,
+                      var current = project?.characters.first(where: { $0.id == selectedCharacterID }) else { return }
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                let data = try Data(contentsOf: url)
+                let name = try store.storeAudio(data: data, fileExtension: url.pathExtension.isEmpty ? "m4a" : url.pathExtension, projectID: projectID)
+                current.referenceAudioFileName = name
+                store.updateCharacter(current, to: projectID)
+            } catch { errorMessage = error.localizedDescription }
+        }
         .fileImporter(isPresented: $showingAudioImporter, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
             do {
                 guard let url = try result.get().first, let page else { return }
@@ -243,7 +266,8 @@ private struct PageEditorView: View {
                 let localURL = store.audioURL(name: name, projectID: projectID)
                 let asset = AVURLAsset(url: localURL)
                 Task {
-                    let loadedDuration = try await asset.load(.duration)\n                    let duration = loadedDuration.seconds
+                    let loadedDuration = try await asset.load(.duration)
+                    let duration = loadedDuration.seconds
                     let region = selectedAudioRegion
                     let words = region.map { estimatedTimings(text: $0.text, duration: duration) } ?? []
                     try playback.load(url: localURL, timings: words)
@@ -300,16 +324,63 @@ private struct PageEditorView: View {
                     Button("未設定") { assign(nil, to: region, page: page) }
                     ForEach(project?.characters ?? []) { character in
                         Button(character.name) { assign(character.id, to: region, page: page) }
+                        Button("「\(character.name)」の参照音声を設定") {
+                            selectedCharacterID = character.id
+                            showingReferenceImporter = true
+                        }
                     }
                 }
                 Spacer()
-                Button { selectedAudioRegion = region; showingAudioImporter = true } label: {
-                    Label("音声を試聴", systemImage: "waveform")
+                Button {
+                    Task { await generateSpeech(for: region, page: page) }
+                } label: {
+                    Label(generatingRegionID == region.id ? "生成中…" : "このセリフを音声生成",
+                          systemImage: "waveform")
                 }
                 .font(.caption)
+                .disabled(generatingRegionID != nil || speechEngine.modelManager.modelDirectory == nil)
+                if let fileName = region.audioFileName {
+                    Button {
+                        let url = store.audioURL(name: fileName, projectID: projectID)
+                        do {
+                            try playback.load(url: url, timings: region.wordTimings)
+                            activeWords = region.wordTimings
+                            playback.play()
+                        } catch { errorMessage = error.localizedDescription }
+                    } label: { Label("再生", systemImage: "play.fill") }
+                    .font(.caption)
+                }
+                Button { selectedAudioRegion = region; showingAudioImporter = true } label: {
+                    Label("音声ファイルを割り当て", systemImage: "folder")
+                }
+                .font(.caption2)
             }
         }
         .padding(12).background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func generateSpeech(for region: SpeechRegion, page: MangaPage) async {
+        guard generatingRegionID == nil else { return }
+        generatingRegionID = region.id
+        defer { generatingRegionID = nil }
+        do {
+            let character = region.speakerID.flatMap { id in project?.characters.first(where: { $0.id == id }) }
+            let referenceURL = character?.referenceAudioFileName.map { store.audioURL(name: $0, projectID: projectID) }
+            let (generatedURL, result) = try await speechEngine.synthesize(region.text, referenceURL: referenceURL,
+                caption: character?.voiceDescription ?? "")
+            let data = try Data(contentsOf: generatedURL)
+            let storedName = try store.storeAudio(data: data, fileExtension: "wav", projectID: projectID)
+            let timings = SpeechTimingEstimator.estimate(text: region.text, duration: result.audioSeconds)
+            var updated = page
+            guard let index = updated.textRegions.firstIndex(where: { $0.id == region.id }) else { return }
+            updated.textRegions[index].audioFileName = storedName
+            updated.textRegions[index].wordTimings = timings
+            store.updatePage(updated, projectID: projectID)
+            let localURL = store.audioURL(name: storedName, projectID: projectID)
+            try playback.load(url: localURL, timings: timings)
+            activeWords = timings
+            playback.play()
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func speakerName(_ id: UUID?) -> String {
