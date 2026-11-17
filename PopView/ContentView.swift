@@ -14,6 +14,17 @@ struct ContentView: View {
     @State private var errorMessage: String?
 
     var body: some View {
+        Group {
+            if speechEngine.isStartupReady {
+                mainInterface
+            } else {
+                ModelStartupView(speechEngine: speechEngine)
+            }
+        }
+        .task { await speechEngine.installModelAtLaunch() }
+    }
+
+    private var mainInterface: some View {
         NavigationStack {
             List {
                 Section {
@@ -72,7 +83,79 @@ struct ContentView: View {
                 Button("OK", role: .cancel) { errorMessage = nil }
             } message: { Text(errorMessage ?? "") }
         }
-        .task { await speechEngine.installModelAtLaunch() }
+    }
+}
+
+private struct ModelStartupView: View {
+    @ObservedObject var speechEngine: LocalSpeechEngine
+    @ObservedObject private var modelManager: LocalModelManager
+
+    init(speechEngine: LocalSpeechEngine) {
+        self.speechEngine = speechEngine
+        self.modelManager = speechEngine.modelManager
+    }
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Spacer()
+            Image(systemName: "waveform.and.mic")
+                .font(.system(size: 54, weight: .medium))
+                .foregroundStyle(.tint)
+            VStack(spacing: 8) {
+                Text("PopView")
+                    .font(.largeTitle.bold())
+                Text("音声モデルを準備しています")
+                    .font(.headline)
+                Text("初回は約2 GBのモデルをダウンロードします。取得と検証が完了すると利用できます。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal)
+            if modelManager.totalFiles > 0 {
+                ProgressView(value: modelManager.progress)
+                    .padding(.horizontal, 32)
+                Text("ファイル \(modelManager.completedFiles) / \(modelManager.totalFiles)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } else {
+                ProgressView()
+            }
+            Text(modelManager.status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            if let error = speechEngine.downloadError {
+                VStack(spacing: 12) {
+                    Text("モデルを取得できませんでした")
+                        .font(.headline)
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                    Button {
+                        Task { await speechEngine.installModelAtLaunch() }
+                    } label: {
+                        Label("再試行", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(speechEngine.isStartupAttempting)
+                }
+                .padding(.horizontal, 28)
+            } else if speechEngine.isStartupAttempting {
+                Text("アプリの利用開始前に、モデルの取得と整合性検証を行っています。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+            Spacer()
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(uiColor: .systemBackground))
     }
 }
 
