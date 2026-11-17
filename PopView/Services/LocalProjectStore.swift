@@ -13,6 +13,8 @@ final class LocalProjectStore: ObservableObject {
         root = base.appendingPathComponent("PopView", isDirectory: true)
         indexURL = root.appendingPathComponent("projects.json")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: inboxFolderURL, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: importedInboxFolderURL, withIntermediateDirectories: true)
         loadIndex()
     }
 
@@ -37,6 +39,100 @@ final class LocalProjectStore: ObservableObject {
         projects[index].pages = projects[index].pages.enumerated()
             .filter { !offsets.contains($0.offset) }
             .map(\.element)
+        persist()
+    }
+
+    /// Files app path: On My iPhone > PopView > Import.
+    var inboxFolderURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Import", isDirectory: true)
+    }
+
+    private var importedInboxFolderURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Imported", isDirectory: true)
+    }
+
+    /// Each dropped folder becomes a project; loose files are imported as one batch.
+    /// Successfully imported source items are moved into Imported to prevent duplicates.
+    func importInboxItems() async throws -> Int {
+        let fm = FileManager.default
+        try fm.createDirectory(at: inboxFolderURL, withIntermediateDirectories: true)
+        try fm.createDirectory(at: importedInboxFolderURL, withIntermediateDirectories: true)
+        let items = try fm.contentsOfDirectory(at: inboxFolderURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey],
+            options: [.skipsHiddenFiles])
+        let supportedExtensions: Set<String> = [
+            "jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "tif", "tiff", "bmp",
+            "pdf", "zip", "cbz", "rar"
+        ]
+        let supported = items.filter { url in
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isHiddenKey])
+            if values?.isHidden == true { return false }
+            return values?.isDirectory == true || supportedExtensions.contains(url.pathExtension.lowercased())
+        }.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+
+        let folders = supported.filter {
+            (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+        let looseFiles = supported.filter {
+            (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true
+        }
+        var importedPageCount = 0
+
+        for folder in folders {
+            importedPageCount += try await importInboxGroup([folder], title: folder.lastPathComponent)
+        }
+        if !looseFiles.isEmpty {
+            let title: String
+            if looseFiles.count == 1 {
+                title = looseFiles[0].deletingPathExtension().lastPathComponent
+            } else {
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "ja_JP")
+                formatter.dateFormat = "yyyy-MM-dd HH-mm"
+                title = "ファイル取り込み " + formatter.string(from: Date())
+            }
+            importedPageCount += try await importInboxGroup(looseFiles, title: title)
+        }
+        return importedPageCount
+    }
+
+    private func importInboxGroup(_ urls: [URL], title: String) async throws -> Int {
+        let project = createProject(title: title)
+        do {
+            let count = try await addImportedItems(urls: urls, to: project.id)
+            guard count > 0 else {
+                deleteProject(project.id)
+                throw MangaImportService.ImportError.noReadablePages
+            }
+            for source in urls {
+                try FileManager.default.moveItem(at: source,
+                    to: uniqueInboxDestination(for: source.lastPathComponent))
+            }
+            return count
+        } catch {
+            deleteProject(project.id)
+            throw error
+        }
+    }
+
+    private func uniqueInboxDestination(for fileName: String) -> URL {
+        let fm = FileManager.default
+        var destination = importedInboxFolderURL.appendingPathComponent(fileName)
+        if fm.fileExists(atPath: destination.path) {
+            let ext = destination.pathExtension
+            let base = destination.deletingPathExtension().lastPathComponent
+            let uniqueName = base + "-" + String(UUID().uuidString.prefix(8))
+                + (ext.isEmpty ? "" : "." + ext)
+            destination = importedInboxFolderURL.appendingPathComponent(uniqueName)
+        }
+        return destination
+    }
+
+    func deleteProject(_ id: UUID) {
+        try? FileManager.default.removeItem(at: projectFolder(id))
+        projects.removeAll { $0.id == id }
         persist()
     }
 
