@@ -9,9 +9,42 @@ jobs:
     runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
+
       - name: Install XcodeGen
         run: brew install xcodegen
+
       - name: Generate project
         run: xcodegen generate
+
       - name: Build simulator target
         run: xcodebuild -project PopView.xcodeproj -scheme PopView -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+
+      - name: Archive for iOS devices (unsigned)
+        run: |
+          xcodebuild \
+            -project PopView.xcodeproj \
+            -scheme PopView \
+            -sdk iphoneos \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/PopView.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            archive
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="$PWD/build/PopView.xcarchive/Products/Applications/PopView.app"
+          test -d "$APP_PATH"
+          mkdir -p "$PWD/build/ipa/Payload"
+          ditto "$APP_PATH" "$PWD/build/ipa/Payload/PopView.app"
+          cd "$PWD/build/ipa"
+          ditto -c -k --sequesterRsrc --keepParent Payload "$PWD/../PopView-unsigned.ipa"
+          test -s "$PWD/../PopView-unsigned.ipa"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PopView-unsigned-IPA
+          path: build/PopView-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
