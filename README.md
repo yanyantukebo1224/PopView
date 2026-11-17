@@ -26,10 +26,17 @@ Irodori Swift SDK 0.2.0をSwift Package ManagerのExact Versionで固定して�
 
 ### M1 — 漫画ライブラリ
 - [x] 作品作成・ローカル永続化
-- [x] 画像複数読み込み
+- [x] 画像複数読み込み（拡張子だけに依存せず画像データとして判定）
 - [x] PDF全ページのページ化・表示
+- [x] ZIP / CBZ / RARアーカイブから画像・PDFを抽出
+- [x] フォルダと多階層サブフォルダを再帰走査
+- [x] アーカイブ内のサブフォルダ・入れ子アーカイブを再帰走査
+- [x] 自然順ソートで「2, 10」などを正しい順番に整列
+- [x] ファイル名が不規則な2〜12ページはFoundation Modelsでサムネイルを見て順番を補助推定
 - [x] ページ一覧・サムネイル
 - [x] 作品単位でページ・音声素材を保存
+
+※RARはUnrar.swift 0.5.4を使用。現在は単一ボリュームのRARに対応し、暗号化RARと分割RARの途中ボリュームは未対応です。ZIP/CBZはZIPFoundation 0.9.20で展開します。アーカイブはパストラバーサル対策を行い、1ファイル160 MiB・合計展開4 GiB・アーカイブ内8,000エントリの上限を設けています。隠しファイル、シンボリックリンク、画像/PDFとして解釈できないファイルは取り込みません。
 
 ### M2 — 漫画解析
 - [x] iOS 27以降のApple Foundation Models画像入力
@@ -63,9 +70,13 @@ Irodori Swift SDK 0.2.0をSwift Package ManagerのExact Versionで固定して�
 
 ## 技術構成
 
-- SwiftUI: UI / 作品・ページ管理
+- SwiftUI: UI / 作品・ページ管理 / ファイル・フォルダ選択
+- FileManager: 再帰フォルダ走査
+- ZIPFoundation: ZIP / CBZ展開
+- Unrar.swift: RAR展開
+- ImageIO: 拡張子に依存しない画像データ判定
 - PDFKit: PDFページレンダリング
-- Foundation Models: iOS 27以降のオンデバイス画像理解・構造化解析
+- Foundation Models: iOS 27以降のオンデバイス画像理解・構造化解析・不規則なファイル名のページ順補助
 - Vision: OCRフォールバック・矩形候補検出
 - IrodoriTTS Swift SDK: モデル取得・検証・Core ML推論・参照音声
 - Core ML: 端末内モデル推論
@@ -80,7 +91,7 @@ xcodegen generate
 open PopView.xcodeproj
 ```
 
-GitHub ActionsのiOS Buildワークフローは、XcodeGenでプロジェクトを生成しiOS Simulator向けにビルドします。
+GitHub ActionsのiOS Buildワークフローは、XcodeGenでプロジェクトを生成しiOS Simulator向けにビルドします。ZIPFoundation 0.9.20とUnrar.swift 0.5.4はSwift Package Managerで取得します。
 
 ## プライバシー
 
