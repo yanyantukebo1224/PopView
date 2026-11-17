@@ -395,6 +395,12 @@ private struct PageEditorView: View {
 
     private func regionEditor(_ region: SpeechRegion, page: MangaPage) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let emotion = region.emotion {
+                Text("感情: \(emotion)").font(.caption).foregroundStyle(.secondary)
+            }
+            if let actingDirection = region.actingDirection {
+                Text("演技指示: \(actingDirection)").font(.caption).foregroundStyle(.secondary)
+            }
             TextField("セリフ", text: Binding(
                 get: { page.textRegions.first(where: {$0.id == region.id})?.text ?? region.text },
                 set: { value in
@@ -453,8 +459,17 @@ private struct PageEditorView: View {
         do {
             let character = region.speakerID.flatMap { id in project?.characters.first(where: { $0.id == id }) }
             let referenceURL = character?.referenceAudioFileName.map { store.audioURL(name: $0, projectID: projectID) }
-            let (generatedURL, result) = try await speechEngine.synthesize(region.text, referenceURL: referenceURL,
-                caption: character?.voiceDescription ?? "")
+            let actingCaption = [
+                character?.voiceDescription,
+                region.emotion.map { "感情: " + $0 },
+                region.actingDirection
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "。")
+            let (generatedURL, result) = try await speechEngine.synthesize(
+                region.text, referenceURL: referenceURL, caption: actingCaption
+            )
             let data = try Data(contentsOf: generatedURL)
             try? FileManager.default.removeItem(at: generatedURL)
             let storedName = try store.storeAudio(data: data, fileExtension: "wav", projectID: projectID)
