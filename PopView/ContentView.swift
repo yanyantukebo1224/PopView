@@ -243,7 +243,7 @@ private struct PageEditorView: View {
                 let localURL = store.audioURL(name: name, projectID: projectID)
                 let asset = AVURLAsset(url: localURL)
                 Task {
-                    let duration = try await asset.load(.duration).seconds
+                    let loadedDuration = try await asset.load(.duration)\n                    let duration = loadedDuration.seconds
                     let region = selectedAudioRegion
                     let words = region.map { estimatedTimings(text: $0.text, duration: duration) } ?? []
                     try playback.load(url: localURL, timings: words)
