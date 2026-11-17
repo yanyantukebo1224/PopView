@@ -21,6 +21,10 @@ final class KaraokePlaybackController: NSObject, ObservableObject, AVAudioPlayer
 
     func play() {
         guard let player else { return }
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        #endif
         player.play()
         isPlaying = true
         ticker?.invalidate()
