@@ -308,8 +308,9 @@ private struct PageEditorView: View {
                         let duration = loadedDuration.seconds
                         let region = selectedAudioRegion
                         let words = region.map { SpeechTimingEstimator.estimate(text: $0.text, duration: duration) } ?? []
-                        if var updated = page, let region,
-                           let index = updated.textRegions.firstIndex(where: { $0.id == region.id }) {
+                        if let region,
+                           let index = page.textRegions.firstIndex(where: { $0.id == region.id }) {
+                            var updated = page
                             updated.textRegions[index].audioFileName = name
                             updated.textRegions[index].wordTimings = words
                             store.updatePage(updated, projectID: projectID)
