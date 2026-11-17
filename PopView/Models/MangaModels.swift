@@ -18,6 +18,14 @@ struct SpeechRegion: Identifiable, Codable, Hashable {
     var confidence: Float
     var wordTimings: [WordTiming] = []
     var audioFileName: String?
+    /// Estimated emotional tone inferred from the page image.
+    var emotion: String?
+    /// Suggested performance direction for speech synthesis.
+    var actingDirection: String?
+    /// Stable speaker label assigned by page analysis, when available.
+    var speakerLabel: String?
+    /// Reading order inferred from the page layout.
+    var readingOrder: Int?
 }
 
 struct CGRectCodable: Codable, Hashable {
@@ -45,6 +53,8 @@ struct CharacterVoice: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var name: String
     var voiceDescription: String = ""
+    /// Visual description inferred from manga artwork; does not affect voice synthesis.
+    var visualDescription: String?
     var referenceAudioFileName: String?
     var createdAt: Date = .now
 }
