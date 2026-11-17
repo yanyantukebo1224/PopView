@@ -33,7 +33,7 @@ struct ContentView: View {
                     }
                     ForEach(store.projects) { project in
                         NavigationLink {
-                            ProjectView(projectID: project.id, store: store, speechEngine: speechEngine)
+                            ProjectView(projectID: project.id, store: store, speechEngine: speechEngine, modelManager: speechEngine.modelManager)
                         } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "book.closed")
@@ -80,6 +80,7 @@ private struct ProjectView: View {
     let projectID: UUID
     @ObservedObject var store: LocalProjectStore
     @ObservedObject var speechEngine: LocalSpeechEngine
+    @ObservedObject var modelManager: LocalModelManager
     @State private var showingImporter = false
     @State private var errorMessage: String?
     @State private var selectedPageID: UUID?
@@ -120,11 +121,11 @@ private struct ProjectView: View {
                 }
             }
             Section("音声モデル") {
-                Label(speechEngine.modelStatus, systemImage: speechEngine.modelManager.isInstalled ? "checkmark.circle.fill" : "arrow.down.circle")
+                Label(speechEngine.modelStatus, systemImage: modelManager.isInstalled ? "checkmark.circle.fill" : "arrow.down.circle")
                     .font(.caption)
-                if speechEngine.modelManager.totalFiles > 0 {
-                    ProgressView(value: speechEngine.modelManager.progress)
-                    Text("\(speechEngine.modelManager.completedFiles)/\(speechEngine.modelManager.totalFiles) ファイル")
+                if modelManager.totalFiles > 0 {
+                    ProgressView(value: modelManager.progress)
+                    Text("\(modelManager.completedFiles)/\(speechEngine.modelManager.totalFiles) ファイル")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let error = speechEngine.downloadError {
@@ -346,7 +347,7 @@ private struct PageEditorView: View {
                           systemImage: "waveform")
                 }
                 .font(.caption)
-                .disabled(generatingRegionID != nil || speechEngine.modelManager.modelDirectory == nil)
+                .disabled(generatingRegionID != nil || modelManager.modelDirectory == nil)
                 if let fileName = region.audioFileName {
                     Button {
                         let url = store.audioURL(name: fileName, projectID: projectID)
