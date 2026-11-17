@@ -106,8 +106,10 @@ final class LocalProjectStore: ObservableObject {
                 deleteProject(project.id)
                 throw MangaImportService.ImportError.noReadablePages
             }
+            // Moving into Imported is housekeeping. A move failure must not
+            // roll back a project that has already been imported successfully.
             for source in urls {
-                try FileManager.default.moveItem(at: source,
+                try? FileManager.default.moveItem(at: source,
                     to: uniqueInboxDestination(for: source.lastPathComponent))
             }
             return count
