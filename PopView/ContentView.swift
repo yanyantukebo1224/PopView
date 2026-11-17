@@ -157,7 +157,8 @@ private struct PageEditorView: View {
     @State private var errorMessage: String?
     @State private var showingCharacter = false
     @State private var characterName = ""
-    @State private var selectedAudioRegion: SpeechRegion?\n    @State private var activeWords: [WordTiming] = []
+    @State private var selectedAudioRegion: SpeechRegion?
+    @State private var activeWords: [WordTiming] = []
     @State private var showingAudioImporter = false
     @StateObject private var playback = KaraokePlaybackController()
 
@@ -246,6 +247,7 @@ private struct PageEditorView: View {
                     let region = selectedAudioRegion
                     let words = region.map { estimatedTimings(text: $0.text, duration: duration) } ?? []
                     try playback.load(url: localURL, timings: words)
+                    activeWords = words
                     playback.play()
                 }
             } catch { errorMessage = error.localizedDescription }
@@ -333,6 +335,17 @@ private struct PageEditorView: View {
             }
             Text("現在の音声：\(playback.currentTime, format: .number.precision(.fractionLength(2))) 秒")
                 .font(.caption).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(activeWords) { word in
+                        Text(word.text)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(playback.activeWordID == word.id ? .orange : .primary)
+                            .background(playback.activeWordID == word.id ? Color.orange.opacity(0.18) : .clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
+            }
             Text("単語タイミングは現在、音声長からの仮推定です。TTSの音素タイムスタンプまたは強制アライメントに置き換えます。")
                 .font(.caption2).foregroundStyle(.secondary)
         }
