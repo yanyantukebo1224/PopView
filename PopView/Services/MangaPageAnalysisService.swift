@@ -15,25 +15,26 @@ struct MangaPageAnalysisService {
             throw MangaAnalyzer.AnalysisError.invalidImage
         }
 
-        var regions = recognized.enumerated().map { index, item in
+        let bubbles = MangaBubbleGrouper.group(recognized)
+        var regions = bubbles.map { bubble in
             var region = SpeechRegion(
-                text: item.text,
-                box: CGRectCodable(item.box),
-                confidence: item.confidence
+                text: bubble.text,
+                box: CGRectCodable(bubble.box),
+                confidence: bubble.confidence
             )
-            region.readingOrder = index
+            region.readingOrder = bubble.readingOrder
             return region
         }
 
         var newCharacters: [CharacterVoice] = []
         var speakerIDs: [String: UUID] = [:]
-        var notice = "Apple Visionの高精度OCRで文字を検出しました。"
+        var notice = "Vision OCRの文字領域を吹き出し候補ごとにまとめました。話者は確信度が低い場合、自動割り当てしません。"
 
         do {
             let semantic = try await FoundationModelsMangaAnalyzer().analyze(
                 image: image,
-                recognizedTexts: recognized.map(\.text),
-                recognizedBoxes: recognized.map(\.box),
+                recognizedTexts: bubbles.map(\.text),
+                recognizedBoxes: bubbles.map(\.box),
                 knownCharacters: knownCharacters
             )
             for speaker in semantic.speakers {
@@ -56,8 +57,10 @@ struct MangaPageAnalysisService {
             for annotation in semantic.annotations {
                 guard regions.indices.contains(annotation.lineIndex) else { continue }
                 let index = annotation.lineIndex
-                regions[index].speakerID = annotation.speakerKey.flatMap { speakerIDs[$0] }
-                regions[index].speakerLabel = annotation.speakerKey
+                let speakerIsConfident = (annotation.confidence ?? 0) >= 0.72
+                let validatedKey = speakerIsConfident ? annotation.speakerKey : nil
+                regions[index].speakerID = validatedKey.flatMap { speakerIDs[$0] }
+                regions[index].speakerLabel = validatedKey
                 regions[index].emotion = annotation.emotion
                 regions[index].actingDirection = annotation.actingDirection
             }
