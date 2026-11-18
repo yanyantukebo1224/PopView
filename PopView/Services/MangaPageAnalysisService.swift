@@ -37,7 +37,11 @@ struct MangaPageAnalysisService {
                 recognizedBoxes: bubbles.map(\.box),
                 knownCharacters: knownCharacters
             )
-            for speaker in semantic.speakers {
+            let confidentSpeakerKeys = Set(semantic.annotations.compactMap { annotation -> String? in
+                guard (annotation.confidence ?? 0) >= 0.72 else { return nil }
+                return annotation.speakerKey
+            })
+            for speaker in semantic.speakers where confidentSpeakerKeys.contains(speaker.key) {
                 if let existing = knownCharacters.first(where: {
                     $0.name.localizedCaseInsensitiveCompare(speaker.name) == .orderedSame
                 }) {
