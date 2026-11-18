@@ -18,6 +18,7 @@ struct FoundationModelsMangaAnalyzer {
         let speakerKey: String?
         let emotion: String?
         let actingDirection: String?
+        let confidence: Double?
     }
 
     private struct Response: Decodable {
@@ -87,6 +88,7 @@ struct FoundationModelsMangaAnalyzer {
             - emotionは短い感情ラベル、actingDirectionは声の高さ・速さ・強さ・間・息づかいなどの演技指示を日本語で具体的に書いてください。
             - ナレーション、効果音、環境音は人物の発話として無理に割り当てないでください。
             - 画像だけで確定できない場合は断定せずnullにしてください。
+            - 各annotationにconfidenceを0.0〜1.0で必ず付けてください。人物の口元・視線・吹き出しのしっぽなど複数の根拠が一致しない場合は0.0〜0.69にしてください。0.72未満の話者はアプリ側で未割り当てになります。
 
             既知キャラクター:
             \(known.isEmpty ? "なし" : known)
@@ -96,7 +98,7 @@ struct FoundationModelsMangaAnalyzer {
 
             次のJSONだけを返してください:
             {"speakers":[{"key":"speaker_1","name":"人物名","appearance":"外見"}],
-             "annotations":[{"lineIndex":0,"speakerKey":"speaker_1","emotion":"驚き","actingDirection":"少し息を吸ってから、短く高めの声で驚く"}]}
+             "annotations":[{"lineIndex":0,"speakerKey":"speaker_1","emotion":"驚き","actingDirection":"少し息を吸ってから、短く高めの声で驚く","confidence":0.85}]}
             """
             Attachment(cgImage)
         }
